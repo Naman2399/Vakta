@@ -1,58 +1,42 @@
 import argparse
 import os
 
+import audiocraft
 import pandas as pd
-import soundfile as sf
-import torch
+import torchaudio
+from audiocraft.models import MusicGen
 from tqdm import tqdm
-from transformers import AutoProcessor, MusicgenForConditionalGeneration
 
 from step8_narration_speech import get_wav_duration
 
 
 def get_arguments() :
     parser = argparse.ArgumentParser(description='Generate background music from text prompts.')
-    parser.add_argument('--input', type=str, default='books/sample/speech_v1/idx_1_chapter_1_speech_v1_speech.csv', help='CSV file for background activities for music generation')
-    parser.add_argument('--model_name', type=str, default='facebook/musicgen-small', help='Hugging Face MusicGen model name')
-    parser.add_argument('--device', type=str, default='cpu', help='Device to run the model on (cpu or cuda)')
+    parser.add_argument('--input', type=str, default='books/sample/musical_prompt/idx_1_chapter_1_speech_v1_enhanced_musical_prompt_speech.csv', help='CSV file for background activities for music generation')
+    parser.add_argument('--model_name', type=str, default='facebook/musicgen-large', help='Hugging Face MusicGen model name')
+    parser.add_argument('--device', type=str, default='cuda', help='Device to run the model on (cpu or cuda)')
 
     return parser.parse_args()
 
 def generate_music(prompt: str, duration_seconds: float = 10,
-                   model_name: str = None,
+                   model: audiocraft.models.MusicGen = None,
                    output_path: str = None, device: str = 'cpu'):
     """
     Generates music from a text prompt for the given duration.
     """
-    # Load model + processor
-    device_map = "cuda" if device == "cuda" and torch.cuda.is_available() else "cpu"
-    model = MusicgenForConditionalGeneration.from_pretrained(model_name).to(device_map)
-    processor = AutoProcessor.from_pretrained(model_name)
 
-    # MusicGen uses tokens to set length
-    tokens_per_5sec = 256
-    max_new_tokens = int((duration_seconds / 5) * tokens_per_5sec)
-
+    model.set_generation_params(duration=duration_seconds)
     # Process input prompt
-    inputs = processor(text=[prompt], return_tensors="pt").to(device_map)
-
-    # Generate audio
-    audio_values = model.generate(**inputs, max_new_tokens=max_new_tokens)
-
-    # Convert to float32 NumPy
-    audio_float32 = audio_values[0].cpu().numpy().astype("float32")
-
-    # Ensure shape is (samples,) not multi-dimensional
-    if audio_float32.ndim > 1:
-        audio_float32 = audio_float32.squeeze()
-
-    # Get sampling rate
-    sampling_rate = model.config.audio_encoder.sampling_rate
-
+    wav = model.generate([prompt])
     # Save as WAV (float32)
-    sf.write(output_path, audio_float32, samplerate=sampling_rate, subtype='FLOAT')
+    torchaudio.save(output_path, wav[0].cpu(), 24000)
 
-    print(f"✅ Music saved to {output_path} ({len(audio_float32) / sampling_rate:.2f} sec)")
+    # Duration calculation
+    sampling_rate = 24000  # MusicGen default
+    num_samples = wav.shape[-1]
+    duration_sec = num_samples / sampling_rate
+
+    print(f"✅ Music saved to {output_path} ({duration_sec:.2f} sec)")
 
 # Example usage
 if __name__ == "__main__":
@@ -82,9 +66,14 @@ if __name__ == "__main__":
     df['background_music_output_path'] = df.apply(lambda row: f"background_music_{row.name + 1}.wav", axis=1)
     df['background_music_duration'] = None
 
+    # Load Model -
+    model = MusicGen.get_pretrained('facebook/musicgen-large', device=device)  # use 'small' for even faster
+
     # Now we will iterate through the dataframe and generate background music for each row
     for index, row in tqdm(df.iterrows(), desc="Generating Background Music", total=len(df)):
-        background_activity = row['Background Activities'].strip()
+        if index < 33 :
+            continue # Skip first 8 rows as they are not relevant for background music generation
+        background_activity = row['Musical Prompt'].strip()
         speech_duration = row['speech_v1_duration']
         output_path = row['background_music_output_path'].strip()
 
@@ -96,7 +85,7 @@ if __name__ == "__main__":
         row['background_music_output_path'] = output_path
 
         # Generate background music with specified activity
-        generate_music(prompt= background_activity, model_name= model_name,  duration_seconds= float(speech_duration), output_path= output_path, device= device)
+        generate_music(prompt= background_activity, model= model,  duration_seconds= float(speech_duration), output_path= output_path, device= device)
 
         # Add background music duration to the dataframe
         row['background_music_duration'] = f'{get_wav_duration(output_path):.2f}'

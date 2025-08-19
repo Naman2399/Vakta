@@ -1,19 +1,32 @@
-from transformers import AutoProcessor, VitsModel
-import torchaudio
+import os
+from TTS.api import TTS
 
-# Model for multilingual + voice cloning
-model_name = "coqui/XTTS-v2"
-from transformers import pipeline
+SOURCE_DIR = "books/sample/musical_prompt/test_10"
+TARGET_WAV = "books/sample/HarishBhimaniVoiceSample.wav"
+OUTPUT_DIR = "books/sample/musical_prompt/test_10_converted"
 
-pipe = pipeline("text-to-speech", model=model_name)
+def main():
+    # Ensure output directory exists
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Input text with emotion hints
-text = "Narrator, [happy and excited]: Today, we begin our magical journey through the forest."
+    # Load FreeVC model once
+    vc = TTS("voice_conversion_models/multilingual/vctk/freevc24", gpu=True)
 
-# Your custom voice sample
-speaker_wav = "custom_voice_sample.wav"
+    # Iterate through all wav files in source directory
+    for file_name in os.listdir(SOURCE_DIR):
+        if file_name.endswith(".wav"):
+            source_path = os.path.join(SOURCE_DIR, file_name)
+            output_path = os.path.join(OUTPUT_DIR, file_name)  # same name in new folder
 
-# Generate audio
-audio = pipe(text, speaker_wav=speaker_wav, language="en")
-with open("output.wav", "wb") as f:
-    f.write(audio["audio"])
+            print(f"Converting: {source_path} -> {output_path}")
+
+            vc.voice_conversion_to_file(
+                source_wav=source_path,
+                target_wav=TARGET_WAV,
+                file_path=output_path
+            )
+
+    print(f"\nAll files converted and saved in: {OUTPUT_DIR}")
+
+if __name__ == "__main__":
+    main()

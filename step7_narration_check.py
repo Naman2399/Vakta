@@ -5,7 +5,7 @@ import argparse
 def get_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Check narration text for consistency.')
-    parser.add_argument('--input_dir', type=str, default='books/sample/narration_enhanced/idx_1_chapter_1_narration_enhanced.csv', help='Path to the input CSV file')
+    parser.add_argument('--input_dir', type=str, default='books/sample/musical_prompt/idx_1_chapter_1_narration_enhanced_musical_prompt.csv', help='Path to the input CSV file')
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -57,4 +57,5 @@ if __name__ == "__main__":
     # Print complete narration content
     print("\nComplete Narration Content:")
     for index, row in df.iterrows():
-        print(f"Row {index + 1}: Actor: {row['Actor']}, Dialogue: {row['Dialogue']}, Emotion: {row['Emotion']}, Background Activities: {row['Background Activities']}")
+        # print(f"Row {index + 1}: Actor: {row['Actor']}, Dialogue: {row['Dialogue']}, Emotion: {row['Emotion']}, Background Activities: {row['Background Activities']}")
+        print(f"Row {index + 1} Dialogue: {row['Dialogue']}")

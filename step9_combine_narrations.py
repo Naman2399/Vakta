@@ -2,10 +2,10 @@ import os
 from pydub import AudioSegment
 
 # Path to folder containing the narration files
-folder_path = "books/sample/speech_v1/test_8"
+folder_path = "books/sample/musical_prompt/test_10_converted"
 
 # Create 3 seconds of silence
-gap = AudioSegment.silent(duration=1000)
+gap = AudioSegment.silent(duration=500)
 
 # Get narration files sorted by index
 files = [f"narration_{i}.wav" for i in range(1, 35)]
