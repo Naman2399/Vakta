@@ -15,9 +15,9 @@ from transformers import AutoTokenizer
 
 def get_argument():
     parser = argparse.ArgumentParser(description="Narration to Speech Synthesis")
-    parser.add_argument("--input_path", type=str, default= "books/sample/narration/idx_1_chapter_1_narration.csv", help="Path to the PDF file")
+    parser.add_argument("--input_path", type=str, default= "books/sample/narration_enhanced/idx_1_chapter_1_narration_enhanced.csv", help="Path to the PDF file")
     parser.add_argument("--model_name", type=str, default="parler-tts/parler-tts-mini-expresso", help="Name of the TTS model to use")
-    parser.add_argument("--device", type=str, default="cuda", help = "Device to run the model on (cuda or cpu)")
+    parser.add_argument("--device", type=str, default="cpu", help = "Device to run the model on (cuda or cpu)")
     return parser.parse_args()
 
 def synthesize_emotional_speech(text, emotion, speaker="deep female voice with rich and captivating tone", output_path="output.wav"):
@@ -92,6 +92,7 @@ if __name__ == "__main__":
         output_path = row['speech_output_path_v1'].strip()
 
         output_dir = os.path.dirname(args.input_path).replace('narration', 'speech_v1').replace('\\', '/')
+        output_dir = os.path.join(output_dir, 'test_10').replace('\\', '/')
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
         output_path = os.path.join(output_dir, output_path).replace('\\', '/')

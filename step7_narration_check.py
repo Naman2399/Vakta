@@ -5,7 +5,7 @@ import argparse
 def get_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Check narration text for consistency.')
-    parser.add_argument('--input_dir', type=str, default='books/sample/narration/idx_1_chapter_1_narration.csv', help='Path to the input CSV file')
+    parser.add_argument('--input_dir', type=str, default='books/sample/narration_enhanced/idx_1_chapter_1_narration_enhanced.csv', help='Path to the input CSV file')
     return parser.parse_args()
 
 if __name__ == "__main__":
