@@ -343,3 +343,14 @@ print("Torch version:", torch.__version__)
 print("CUDA available:", torch.cuda.is_available())
 print("CUDA version:", torch.version.cuda)
 print("GPU name:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "No GPU")
+
+
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_THREADING_LAYER"] = "GNU"
+
+from audiocraft.models import MusicGen
+torch.cuda.empty_cache()
+print("Loading model...")
+model = MusicGen.get_pretrained("facebook/musicgen-melody", device="cuda")
+print("Model loaded OK")
