@@ -117,13 +117,13 @@ def dynamic_ducking_numpy(
 
 # Example:
 dynamic_ducking_numpy(
-    "books/sample/musical_prompt/test_10/narration_2.wav",
-    "books/sample/musical_prompt/background_music_2.wav",
-    "books/sample/musical_prompt/merge",
+    "books/sample_v2/chapter_1/narration_speech/narration_1.wav",
+    "books/sample_v2/chapter_1/background_music/background_music_1.wav",
+    "books/sample_v2/chapter_1/merge_narration_background_music",
 
     # --- Adjusted values ---
-    music_base_db=-22.0,   # lower constant level (was -14.0)
-    duck_extra_db=-12.0,   # stronger dip during speech (was -10.0)
+    music_base_db=-14.0,   # lower constant level (was -14.0)
+    duck_extra_db=-10.0,   # stronger dip during speech (was -10.0)
 
     frame_ms=160,
     attack_ms=60,

@@ -1,5 +1,6 @@
-books
 .idea
-config
 *.pyc
 __pycache__/
+books
+config
+reference_wav_audio_samples

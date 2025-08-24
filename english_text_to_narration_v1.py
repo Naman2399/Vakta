@@ -29,7 +29,10 @@ from audiocraft.models import MusicGen
 from openai import OpenAI
 from tqdm import tqdm
 
+from config.audio_reference_samples import ENG_UK_DAVID
+from config.background_music_models import MUSIC_GEN_SMALL
 from config.open_ai_config import API_KEY, TEXT_MODEL
+from config.tts_model_config import XTTS_V2
 from interfaces.narration import NarrationInterface
 from interfaces.ocr import OCRInterface
 
@@ -39,6 +42,7 @@ os.environ["MKL_THREADING_LAYER"] = "GNU"
 def get_arguments():
 
     parser = argparse.ArgumentParser(description="Convert the English Story PDF to narration speech and background music.")
+
     # Step1 : Extract text from the PDF using OCR and save it to a CSV file.
     parser.add_argument('--pdf_path', type=str, default= "books/sample_v2/book.pdf",help='Path to the input PDF file.')
     parser.add_argument('---pdf_start_page', type=int, default=5, help='Start page number for text extraction.')
@@ -55,18 +59,21 @@ def get_arguments():
     parser.add_argument('--output_csv_file_name_dialogue', type=str, default='narration_dialogues.csv', help='Path to save the narration dialogues as CSV.')
 
     # Step 7 : Convert the TTS
-    parser.add_argument('--reference_wav', type=str, default='books/sample/ENG_UK_M_DavidS.wav', help='Path to the reference audio file for TTS synthesis.')
-    parser.add_argument("--tts_model_name", type=str, default="tts_models/multilingual/multi-dataset/xtts_v2", help="Name of the TTS model to use")
+    parser.add_argument('--reference_wav', type=str, default= ENG_UK_DAVID, help='Path to the reference audio file for TTS synthesis.')
+    parser.add_argument("--tts_model_name", type=str, default= XTTS_V2, help="Name of the TTS model to use")
 
     # Step 8 : Background Music Generation
-    parser.add_argument('--background_music_model', type=str, default="facebook/musicgen-small", help= "Model for generating the Background Music using prompt")  # Adding small model for now [Original] ---> facebook/musicgen-large
+    parser.add_argument('--background_music_model', type=str, default= MUSIC_GEN_SMALL, help= "Model for generating the Background Music using prompt")  # Adding small model for now [Original] ---> facebook/musicgen-large
 
     return parser.parse_args()
 
 class EnglishNarration(OCRInterface, NarrationInterface) :
 
-    def __init__(self, pdf_path, pdf_start_page, pdf_end_page, device, output_csv_file_path, openai_api_key,
-                 open_ai_text_model, output_csv_file_path_dialogue, reference_wav, tts_model_name, background_music_model):
+    def __init__(self, pdf_path: str, pdf_start_page: int, pdf_end_page: int,
+                 device: str, output_csv_file_path: str,
+                 openai_api_key: str, open_ai_text_model: str,
+                 output_csv_file_path_dialogue: str, reference_wav: str,
+                 tts_model_name: str, background_music_model: str)  :
 
         self.pdf_path = pdf_path
         self.pdf_start_page = pdf_start_page
@@ -77,28 +84,29 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         self.output_csv_file_path_dialogue = output_csv_file_path_dialogue
         self.reference_wav = reference_wav
         self.tts_model_name = tts_model_name
-        self.background_music_model = background_music_model
+        self.background_music_model_name = background_music_model
 
         # Initialize OpenAI client
         self.open_ai_client = OpenAI(api_key=self.openai_api_key)
         self.open_ai_text_model = open_ai_text_model
 
-
         # Initialize TTS model
         self.tts = TTS(self.tts_model_name).to(self.device)
 
         # Initialize MusicGen model
-        self.musicgen_model = MusicGen.get_pretrained(self.background_music_model, device= self.device)
+        self.musicgen_model = MusicGen.get_pretrained(self.background_music_model_name, device= self.device)
 
         # Initialize DataFrame to hold extracted text
         self.df : pandas.DataFrame = None
         self.df_dialogues : pandas.DataFrame = None
 
+        return
+
     def extract_text_from_pdf(self, pdf_path: str, start_page: int, end_page: int,
                               output_csv_file_name: str) -> pandas.DataFrame:
         """
-                Step 1:
-                Extract text from the PDF file using OCR and save it to a CSV file.
+            Extract text from the PDF file using OCR and save it to a CSV file.
+            Output consists of the dataframe with columsn [Page Number, Content]
         """
 
         # Initialize OCR reader
@@ -124,7 +132,12 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         self.df = pd.read_csv(output_csv_file_name)
         return self.df
 
-    def clean_ocr_text_iterrator(self, df: pandas.DataFrame):
+    def clean_ocr_text_iterrator(self, df: pandas.DataFrame) -> pandas.DataFrame :
+
+        """
+        :param df: Dataframe consits of [Page Number, Content]
+        :return: Return DataFrame [Page Number, Content, Content Clean]
+        """
 
         # Iterate through each row and clean the text
         self.df = df
@@ -145,10 +158,9 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
     def clean_ocr_text(self, text: str) -> str:
 
         """
-               Step 2:
-               Clean the OCR text using OpenAI API to improve readability and remove errors.
-               :param text:
-               :return: the cleaned text
+            Clean the OCR text using OpenAI API to improve readability and remove errors.
+            :param text: text input
+            :return: the cleaned text
         """
 
         system_prompt = """You are an assistant that cleans and refines OCR text while preserving its meaning. 
@@ -177,6 +189,12 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         return response.output_text.strip()
 
     def generate_script_iterrator(self, df: pandas.DataFrame) -> pandas.DataFrame:
+
+        """
+
+        :param df: Input is the dataframe consists of columns [Page Number, Content, Content Clean]
+        :return: df : Output consists of columns ['Actor', 'Dialogue', 'Emotion', 'Background Activity']
+        """
 
         # Convert each page of text to a script format
         dialogues = []
@@ -221,6 +239,13 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
 
     def generate_script(self, prev_text: str, current_text: str) -> str:
 
+        """
+
+        :param prev_text: Based on the continuity of the data from prev page content
+        :param current_text: Current Page Content
+        :return: ALl the dialgoues with appropirate pause in the format prescribed below with different parameters as mentioned in the iterrator function
+        """
+
         system_prompt = """
                     You are a scriptwriter for an audiobook where the narrator tells the story as a continuous, immersive script. 
                     Follow these principles:
@@ -261,6 +286,12 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
 
     def convert_narration_to_enhanced_narration_iterrator(self, df: pandas.DataFrame) -> pandas.DataFrame:
 
+        """
+
+        :param df: Dataframe consists of ['Actor', 'Dialogue', 'Emotion', 'Background Activity']
+        :return: To bring the continuity in the above method between each dailogue will return new column 'Dialogue Enhanced'
+        """
+
         self.df = df.copy()
         self.df["Dialogue Enhanced"] = np.nan
 
@@ -298,6 +329,13 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
 
     def convert_narration_to_enhanced_narration(self, current_text: str, next_text: str) -> str:
 
+        """
+
+        :param current_text: Take the current dialogue
+        :param next_text: Next dialogue
+        :return: Return the continous flow for better narration
+        """
+
         system_prompt = system_prompt = """
             You are a skilled audiobook script editor.
             Task:
@@ -324,6 +362,12 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         return response.output_text.strip()
 
     def convert_background_activites_and_dialogues_to_musical_prompt_iterrator(self, df: pandas.DataFrame) -> pandas.DataFrame:
+
+        """
+
+        :param df: Dataframe consists ['Actor', 'Dialogue', 'Emotion', 'Background Activity', 'Dialogue Enhanced']
+        :return: Return a new column ['Musical Prompt'] based on the Dialogue Enhanced and Background Activity
+        """
 
         self.df = df
         df['Musical Prompt'] = np.NAN
@@ -431,6 +475,12 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
 
     def convert_text_to_speech_iterrator(self, df: pandas.DataFrame) -> pandas.DataFrame:
 
+        """
+
+        :param df: Input consists of ["Actor", "Dialogue", "Emotion", "Background Activity", "Dialogue Enhanced", "Musical Prompt"]
+        :return: Add two more columns Speech Output Path, Speech Duration
+        """
+
         df['Speech Output Path'] = df.apply(lambda row: f"narration_{row.name + 1}.wav", axis=1)
         df['Speech Duration'] = None
 
@@ -529,8 +579,8 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
     def generate_background_music_iterator(self, df: pandas.DataFrame) -> pandas.DataFrame:
         """
             Iterator to generate background music from Musical Prompt
-        :param df:
-        :return:
+        :param df: Dataframe - ["Actor", "Dialogue", "Emotion", "Background Activity", "Dialogue Enhanced", "Musical Prompt", "Speech Output Path", "Speech Duration"]
+        :return: Dataframe - ["Background Music Output Path", "Background Music Duration"]
         """
 
         df['Background Music Output Path'] = df.apply(lambda row: f"background_music_{row.name + 1}.wav", axis=1)
@@ -785,7 +835,7 @@ if __name__ == '__main__' :
         torch.cuda.empty_cache()
         df = narration.generate_background_music_iterator(df)
 
-        print("Task Completed")
+        print("All Task Completed")
 
 
 
