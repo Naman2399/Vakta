@@ -338,19 +338,33 @@
 
 
 
+# import torch
+# print("Torch version:", torch.__version__)
+# print("CUDA available:", torch.cuda.is_available())
+# print("CUDA version:", torch.version.cuda)
+# print("GPU name:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "No GPU")
+#
+#
+# import os
+# os.environ["OMP_NUM_THREADS"] = "1"
+# os.environ["MKL_THREADING_LAYER"] = "GNU"
+#
+# from audiocraft.models import MusicGen
+# torch.cuda.empty_cache()
+# print("Loading model...")
+# model = MusicGen.get_pretrained("facebook/musicgen-melody", device="cuda")
+# print("Model loaded OK")
+
 import torch
-print("Torch version:", torch.__version__)
-print("CUDA available:", torch.cuda.is_available())
-print("CUDA version:", torch.version.cuda)
-print("GPU name:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "No GPU")
+from diffusers import CosmosTextToWorldPipeline
+from diffusers.utils import export_to_video
 
+model_id = "nvidia/Cosmos-1.0-Diffusion-7B-Text2World"
+pipe = CosmosTextToWorldPipeline.from_pretrained(model_id, torch_dtype=torch.bfloat16)
+pipe.to("cuda")
 
-import os
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_THREADING_LAYER"] = "GNU"
+prompt = "A sleek, humanoid robot stands in a vast warehouse filled with neatly stacked cardboard boxes on industrial shelves. The robot's metallic body gleams under the bright, even lighting, highlighting its futuristic design and intricate joints. A glowing blue light emanates from its chest, adding a touch of advanced technology. The background is dominated by rows of boxes, suggesting a highly organized storage system. The floor is lined with wooden pallets, enhancing the industrial setting. The camera remains static, capturing the robot's poised stance amidst the orderly environment, with a shallow depth of field that keeps the focus on the robot while subtly blurring the background for a cinematic effect."
 
-from audiocraft.models import MusicGen
-torch.cuda.empty_cache()
-print("Loading model...")
-model = MusicGen.get_pretrained("facebook/musicgen-melody", device="cuda")
-print("Model loaded OK")
+output = pipe(prompt=prompt).frames[0]
+export_to_video(output, "output.mp4", fps=30)
+
