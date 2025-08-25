@@ -355,16 +355,96 @@
 # model = MusicGen.get_pretrained("facebook/musicgen-melody", device="cuda")
 # print("Model loaded OK")
 
-import torch
-from diffusers import CosmosTextToWorldPipeline
-from diffusers.utils import export_to_video
+# import torch
+# from diffusers import CosmosTextToWorldPipeline
+# from diffusers.utils import export_to_video
+#
+# model_id = "nvidia/Cosmos-1.0-Diffusion-7B-Text2World"
+# pipe = CosmosTextToWorldPipeline.from_pretrained(model_id, torch_dtype=torch.bfloat16)
+# pipe.to("cuda")
+#
+# prompt = "A sleek, humanoid robot stands in a vast warehouse filled with neatly stacked cardboard boxes on industrial shelves. The robot's metallic body gleams under the bright, even lighting, highlighting its futuristic design and intricate joints. A glowing blue light emanates from its chest, adding a touch of advanced technology. The background is dominated by rows of boxes, suggesting a highly organized storage system. The floor is lined with wooden pallets, enhancing the industrial setting. The camera remains static, capturing the robot's poised stance amidst the orderly environment, with a shallow depth of field that keeps the focus on the robot while subtly blurring the background for a cinematic effect."
+#
+# output = pipe(prompt=prompt).frames[0]
+# export_to_video(output, "output.mp4", fps=30)
 
-model_id = "nvidia/Cosmos-1.0-Diffusion-7B-Text2World"
-pipe = CosmosTextToWorldPipeline.from_pretrained(model_id, torch_dtype=torch.bfloat16)
-pipe.to("cuda")
+# import torch
+# from diffusers import DiffusionPipeline, DPMSolverMultistepScheduler
+# from diffusers.utils import export_to_video
+#
+# def generate_video(prompt: str, num_frames: int = 16, output_path: str = "output.mp4"):
+#     # Load the ModelScope T2V pipeline in FP16 for efficiency
+#     pipe = DiffusionPipeline.from_pretrained(
+#         "damo-vilab/text-to-video-ms-1.7b",
+#         torch_dtype=torch.float16,
+#         variant="fp16"
+#     )
+#     pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
+#     pipe.enable_model_cpu_offload()  # Helps reduce GPU memory usage
+#
+#     # Generate video frames
+#     video = pipe(prompt, num_frames=num_frames).frames
+#     # Save as MP4
+#     output_video = export_to_video(video)
+#     print(f"🎥 Video saved to {output_video}")
+#
+# # Example Usage
+# if __name__ == "__main__":
+#     prompt = "Spiderman is surfing"
+#     generate_video(prompt, num_frames=16)
 
-prompt = "A sleek, humanoid robot stands in a vast warehouse filled with neatly stacked cardboard boxes on industrial shelves. The robot's metallic body gleams under the bright, even lighting, highlighting its futuristic design and intricate joints. A glowing blue light emanates from its chest, adding a touch of advanced technology. The background is dominated by rows of boxes, suggesting a highly organized storage system. The floor is lined with wooden pallets, enhancing the industrial setting. The camera remains static, capturing the robot's poised stance amidst the orderly environment, with a shallow depth of field that keeps the focus on the robot while subtly blurring the background for a cinematic effect."
+# from pydub import AudioSegment
+#
+#
+# def merge_with_crossfade(output_path, input_files, crossfade_ms=2000):
+#     """
+#     Merge WAV files with smooth transitions (crossfade).
+#
+#     Args:
+#         output_path (str): Path to save the final merged wav file.
+#         input_files (list): List of wav file paths to merge.
+#         crossfade_ms (int): Crossfade duration in milliseconds (default: 2000 ms = 2 sec).
+#     """
+#     if not input_files:
+#         raise ValueError("No input files provided!")
+#
+#     # Load first file
+#     combined = AudioSegment.from_wav(input_files[0])
+#
+#     # Merge rest with crossfade
+#     for file in input_files[1:]:
+#         audio = AudioSegment.from_wav(file)
+#         combined = combined.append(audio, crossfade=crossfade_ms)
+#
+#     # Export merged file
+#     combined.export(output_path, format="wav")
+#     print(f"✅ Merged file with crossfade saved: {output_path}")
+#
+#
+# # Example usage
+# files = ["file1.wav", "file2.wav", "file3.wav"]
+# merge_with_crossfade("merged_with_crossfade.wav", files, crossfade_ms=1500)
 
-output = pipe(prompt=prompt).frames[0]
-export_to_video(output, "output.mp4", fps=30)
+import pandas as pd
+import soundfile as sf
+
+# Input and output file paths
+input_csv = "books/sample_v2/chapter_1/narration_dialogues.csv"
+output_csv = "books/sample_v2/chapter_1/narration_dialogues.csv"
+
+# Read the CSV
+df = pd.read_csv(input_csv)
+
+# Compute durations
+df["Background Music Duration"] = df["Background Music Output Path"].apply(
+    lambda path: round(len(sf.SoundFile("books/sample_v2/chapter_1/background_music/"+path)) / sf.SoundFile("books/sample_v2/chapter_1/background_music/"+path).samplerate, 2)
+    if pd.notnull(path) else None
+)
+
+df["Background Music Output Path"] = df["Background Music Output Path"].apply(
+    lambda path : "books/sample_v2/chapter_1/background_music/"+path
+)
+# Save the updated CSV
+df.to_csv(output_csv, index=False, encoding="utf-8")
+print(f"✅ Durations added and saved to {output_csv}")
 

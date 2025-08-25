@@ -18,6 +18,7 @@ import re
 import audiocraft
 import easyocr
 import fitz
+import librosa
 import numpy as np
 import pandas
 import pandas as pd
@@ -30,15 +31,13 @@ from openai import OpenAI
 from tqdm import tqdm
 
 from config.audio_reference_samples import ENG_UK_DAVID
-from config.background_music_models import MUSIC_GEN_SMALL
+from config.background_music_models import MUSIC_GEN_MELODY
 from config.open_ai_config import API_KEY, TEXT_MODEL
 from config.tts_model_config import XTTS_V2
 from interfaces.narration import NarrationInterface
 from interfaces.ocr import OCRInterface
-import os
-import numpy as np
-import librosa
-import soundfile as sf
+from pydub import AudioSegment
+
 
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_THREADING_LAYER"] = "GNU"
@@ -50,7 +49,7 @@ def get_arguments():
     # Step1 : Extract text from the PDF using OCR and save it to a CSV file.
     parser.add_argument('--pdf_path', type=str, default= "books/sample_v2/book.pdf",help='Path to the input PDF file.')
     parser.add_argument('---pdf_start_page', type=int, default=5, help='Start page number for text extraction.')
-    parser.add_argument('--pdf_end_page', type=int, default=5, help='End page number for text extraction.')
+    parser.add_argument('--pdf_end_page', type=int, default=9, help='End page number for text extraction.')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use for OCR processing (e.g., "cpu" or "cuda").')
     # Output csv path ---> The output directory will be same as that of pdf_path, with the output file name specified.
     parser.add_argument('--output_csv_file_name', type=str, default='extracted_text.csv', help='Path to save the extracted text as CSV.')
@@ -67,7 +66,7 @@ def get_arguments():
     parser.add_argument("--tts_model_name", type=str, default= XTTS_V2, help="Name of the TTS model to use")
 
     # Step 8 : Background Music Generation
-    parser.add_argument('--background_music_model', type=str, default= MUSIC_GEN_SMALL, help= "Model for generating the Background Music using prompt")  # Adding small model for now [Original] ---> facebook/musicgen-large
+    parser.add_argument('--background_music_model', type=str, default= MUSIC_GEN_MELODY, help= "Model for generating the Background Music using prompt")  # Adding small model for now [Original] ---> facebook/musicgen-large
 
     return parser.parse_args()
 
@@ -300,13 +299,17 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         self.df["Dialogue Enhanced"] = np.nan
 
         for i in tqdm(range(len(self.df)), desc="Converting narration to enhanced narration"):
+
             if i < len(self.df) - 1:
                 current_text = self.df.at[i, "Dialogue"]
                 next_text = self.df.at[i + 1, "Dialogue"]
 
+                # Instead of full next_text, only send the first 10 words
+                next_teaser = " ".join(next_text.split()[:10])
+
                 script = self.convert_narration_to_enhanced_narration(
                     current_text=current_text,
-                    next_text=next_text
+                    next_teaser=next_teaser
                 )
 
                 # Debug print
@@ -320,9 +323,18 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
                     print(f"⚠️ Unexpected format at row {i + 1}: {script}")
                     self.df.at[i, "Dialogue Enhanced"] = current_text  # fallback
             else:
-                # Last row – just copy original
-                self.df.at[i, "Dialogue Enhanced"] = self.df.at[i, "Dialogue"]
+                # Last row – wrap up narration instead of copying directly
+                current_text = self.df.at[i, "Dialogue"]
 
+                script = self.convert_narration_to_final_wrapup(current_text=current_text)
+
+                print(f"Final Script for row {i + 1}:\n{script}\n{'-' * 50}")
+
+                parts = [p.strip() for p in script.split("<break>")]
+                if len(parts) == 2:
+                    self.df.at[i, "Dialogue Enhanced"] = parts[1]
+                else:
+                    self.df.at[i, "Dialogue Enhanced"] = current_text
         # Save results
         print(f"Saving enhanced dialogues to {self.output_csv_file_path_dialogue}")
         self.df.to_csv(str(self.output_csv_file_path_dialogue), index=False, encoding="utf-8")
@@ -331,32 +343,34 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         return self.df
 
 
-    def convert_narration_to_enhanced_narration(self, current_text: str, next_text: str) -> str:
+    def convert_narration_to_enhanced_narration(self, current_text: str, next_teaser: str) -> str:
 
         """
-
         :param current_text: Take the current dialogue
-        :param next_text: Next dialogue
-        :return: Return the continous flow for better narration
+        :param next_teaser: First few words of next dialogue (teaser only)
+        :return: Return the continuous flow for better narration
         """
 
-        system_prompt = system_prompt = """
+        system_prompt = """
             You are a skilled audiobook script editor.
             Task:
-            1. Merge the two segments into one smooth narration (no abrupt breaks).
-            2. Actor is always "Narrator".
-            3. Output exactly in this format (separated by <break>):
-            Narrator <break> Merged Dialogue
+            1. Smoothly close the current narration and lightly hint towards the next teaser.
+            2. Do not repeat or narrate the full next dialogue.
+            3. Actor is always "Narrator".
+            4. Output exactly in this format (separated by <break>):
+            Narrator <break> Enhanced Dialogue
         """
 
         user_prompt = f"""
-                Merge these two narration segments into a single, smooth-flowing audiobook narration:
-                Segment 1: "{current_text}"
-                Segment 2: "{next_text}"
-                """
+            Current Segment: "{current_text}"
+            Upcoming Teaser (just first words of the next line): "{next_teaser}"
+    
+            Merge these into one smooth narration. Finish the current line naturally,
+            and if needed, add a subtle link towards the upcoming teaser without repeating it fully.
+        """
 
         response = self.open_ai_client.responses.create(
-            model= self.open_ai_text_model,  # Cheap and good quality
+            model=self.open_ai_text_model,
             input=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -364,6 +378,38 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         )
 
         return response.output_text.strip()
+
+    def convert_narration_to_final_wrapup(self, current_text: str) -> str:
+        """
+        For the last narration, provide a natural wrap-up.
+        """
+        system_prompt = """
+            You are a skilled audiobook script editor.
+            Task:
+            1. Smoothly close the narration as if it is the end of a chapter or section.
+            2. Actor is always "Narrator".
+            3. Do not hint at more content after this.
+            4. Output exactly in this format (separated by <break>):
+            Narrator <break> Final Dialogue
+        """
+
+        user_prompt = f"""
+            Final Segment: "{current_text}"
+
+            Enhance this into a natural wrap-up narration that feels complete,
+            like the closing line of a story or audiobook section.
+        """
+
+        response = self.open_ai_client.responses.create(
+            model=self.open_ai_text_model,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+        )
+
+        return response.output_text.strip()
+
 
     def convert_background_activites_and_dialogues_to_musical_prompt_iterrator(self, df: pandas.DataFrame) -> pandas.DataFrame:
 
@@ -565,8 +611,8 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         combined = self.apply_fades(combined, fade_len=400)
 
         # Save intermediate raw file
-        sf.write("raw_output.wav", combined, sr)
-        print("💾 Raw file saved: raw_output.wav")
+        # sf.write("raw_output.wav", combined, sr)
+        # print("💾 Raw file saved: raw_output.wav")
 
         # Denoise
         clean = self.denoise_audio(combined, sr)
@@ -602,15 +648,15 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
             output_path = row['Background Music Output Path'].strip()
 
             output_path = os.path.join(str(background_music_output_path), output_path).replace('\\', '/')
-            row['Background Music Output Path'] = output_path
+            df.at[index, 'Background Music Output Path'] = output_path
 
             # Generate background music with specified activity
-            duration_sec = self.generate_background_music(prompt=background_activity, model=self.background_music_model,
+            duration_sec = self.generate_background_music(prompt=background_activity, model=self.musicgen_model,
                                                               duration =float(speech_duration),
                                                               output_path=output_path, device=args.device)
 
             # Add background music duration to the dataframe
-            row['Background Music Duration'] = f'{duration_sec:.2f}'
+            df.at[index, 'Background Music Duration'] = f'{duration_sec:.2f}'
 
         df.to_csv(str(self.output_csv_file_path_dialogue), index=False, encoding="utf-8")
         print(f"Background Music generation complete. Audio files saved in {background_music_output_path}.")
@@ -634,7 +680,10 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
 
         self.musicgen_model.set_generation_params(duration=duration)
         # Process input prompt
-        wav = self.musicgen_model.generate([prompt])
+        try :
+            wav = self.musicgen_model.generate([prompt])
+        except :
+            return float(-1)
         # Save as WAV (float32)
         torchaudio.save(output_path, wav[0].cpu(), 24000)
 
@@ -750,13 +799,13 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
             os.makedirs(narration_and_background_music_output_path)
 
         # Now we will iterate through the dataframe and generate background music for each row
-        for index, row in tqdm(df.iterrows(), desc="Generating Background Music", total=len(df)):
+        for index, row in tqdm(df.iterrows(), desc="Merging Narration + Background Music", total=len(df)):
             narration_path = row['Speech Output Path'].strip()
             background_music_path = row['Background Music Output Path'].strip()
             output_path = row['Narration with Background Music Output Path'].strip()
 
             output_path = os.path.join(str(narration_and_background_music_output_path), output_path).replace('\\', '/')
-            row['Narration with Background Music Output Path'] = output_path
+            df.at[index, 'Narration with Background Music Output Path'] = output_path
 
             # Generate background music with specified activity
             duration_sec = self.merge_narration_background_music(
@@ -775,7 +824,7 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
             )
 
             # Add background music duration to the dataframe
-            row['Narration with Background Music Duration'] = f'{duration_sec:.2f}'
+            df.at[index, 'Narration with Background Music Duration'] = f'{duration_sec:.2f}'
 
         df.to_csv(str(self.output_csv_file_path_dialogue), index=False, encoding="utf-8")
         print(f"Background Music generation complete. Audio files saved in {narration_and_background_music_output_path}.")
@@ -903,6 +952,50 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
 
         return duration_sec
 
+    def merge_wavs(self, df: pandas.DataFrame , crossfade_ms: int = 1000) -> None :
+        """
+        Merge multiple wav files listed in a CSV into one file with smooth transitions.
+
+        Args:
+            csv_path (str): Path to CSV file containing wav file paths.
+            column_name (str): Column name in CSV that holds relative wav paths.
+            base_dir (str): Base directory for the wav files (e.g., D:/Vakta/).
+            output_path (str): Path where merged wav will be saved.
+            crossfade_ms (int): Crossfade duration in milliseconds between clips.
+        """
+
+        # Initialize an empty audio segment
+        final_audio = None
+
+        for idx, row in df.iterrows():
+            file_path = row["Narration with Background Music Output Path"]
+
+            if not os.path.exists(file_path):
+                print(f"❌ File not found: {file_path}")
+                continue
+
+            # Load wav file
+            audio = AudioSegment.from_wav(file_path)
+
+            if final_audio is None:
+                final_audio = audio
+            else:
+                # Append with crossfade
+                final_audio = final_audio.append(audio, crossfade=crossfade_ms)
+
+            print(f"✅ Added: {file_path}")
+
+        # Export final audio
+        if final_audio:
+            base_dir = os.path.dirname(self.output_csv_file_path)
+            final_audio_output_path = os.path.join(base_dir, "final.wav").replace('\\', '/')
+            final_audio.export(final_audio_output_path, format="wav")
+            print(f"🎵 Final merged audio saved at: {final_audio_output_path}")
+        else:
+            print("⚠️ No audio files merged!")
+
+        return
+
 if __name__ == '__main__' :
 
     # Parse the arguments
@@ -964,6 +1057,9 @@ if __name__ == '__main__' :
         output_csv_file_path = os.path.join(base_dir, f"{output_csv_file_name}").replace('\\', '/')
         output_csv_file_path_dialogue = os.path.join(base_dir, f"{output_csv_file_name_dialogue}").replace('\\', '/')
 
+        print(f"CSV path : {output_csv_file_path}")
+        print(f"CSV Dialogue path : {output_csv_file_path_dialogue}")
+
         # Create an instance of the EnglishNarration class
         narration = EnglishNarration(
             pdf_path=pdf_path,
@@ -1011,11 +1107,11 @@ if __name__ == '__main__' :
         df = narration.merge_narration_background_music_iterrator(df)
 
         print("Step 10 : Need to merge all different chunks into a single file ...")
-        # TODO : Next step
+        df = pd.read_csv(output_csv_file_path_dialogue)
+        narration.merge_wavs(df)
 
         print("Step 11 : Need to create video for each different prompt and need to save them ...")
         # TODO : Next Step
-
 
         print("All Task Completed")
 
