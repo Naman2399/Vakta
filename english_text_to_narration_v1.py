@@ -300,41 +300,56 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
 
         for i in tqdm(range(len(self.df)), desc="Converting narration to enhanced narration"):
 
-            if i < len(self.df) - 1:
-                current_text = self.df.at[i, "Dialogue"]
-                next_text = self.df.at[i + 1, "Dialogue"]
+            current_text = self.df.at[i, "Dialogue"]
+            script = self.convert_narration_to_enhanced_narration(current_text= current_text)
 
-                # Instead of full next_text, only send the first 10 words
-                next_teaser = " ".join(next_text.split()[:10])
+            # Debug print
+            print(f"Script for row {i + 1}:\n{script}\n{'-' * 50}")
 
-                script = self.convert_narration_to_enhanced_narration(
-                    current_text=current_text,
-                    next_teaser=next_teaser
-                )
-
-                # Debug print
-                print(f"Script for row {i + 1}:\n{script}\n{'-' * 50}")
-
-                # Parse LLM response
-                parts = [p.strip() for p in script.split("<break>")]
-                if len(parts) == 2:  # Actor + merged narration
-                    self.df.at[i, "Dialogue Enhanced"] = parts[1]
-                else:
-                    print(f"⚠️ Unexpected format at row {i + 1}: {script}")
-                    self.df.at[i, "Dialogue Enhanced"] = current_text  # fallback
+            # Parse LLM response
+            parts = [p.strip() for p in script.split("<break>")]
+            if len(parts) == 2:  # Actor + merged narration
+                self.df.at[i, "Dialogue Enhanced"] = parts[1]
             else:
-                # Last row – wrap up narration instead of copying directly
-                current_text = self.df.at[i, "Dialogue"]
+                print(f"⚠️ Unexpected format at row {i + 1}: {script}")
+                self.df.at[i, "Dialogue Enhanced"] = current_text  # fallback
 
-                script = self.convert_narration_to_final_wrapup(current_text=current_text)
+            # if i < len(self.df) - 1:
+            #     current_text = self.df.at[i, "Dialogue"]
+            #     next_text = self.df.at[i + 1, "Dialogue"]
+            #
+            #     # Instead of full next_text, only send the first 10 words
+            #     next_teaser = " ".join(next_text.split()[:10])
+            #
+            #     script = self.convert_narration_to_enhanced_narration(
+            #         current_text=current_text,
+            #         next_teaser=next_teaser
+            #     )
+            #
+            #     # Debug print
+            #     print(f"Script for row {i + 1}:\n{script}\n{'-' * 50}")
+            #
+            #     # Parse LLM response
+            #     parts = [p.strip() for p in script.split("<break>")]
+            #     if len(parts) == 2:  # Actor + merged narration
+            #         self.df.at[i, "Dialogue Enhanced"] = parts[1]
+            #     else:
+            #         print(f"⚠️ Unexpected format at row {i + 1}: {script}")
+            #         self.df.at[i, "Dialogue Enhanced"] = current_text  # fallback
+            # else:
+            #     # Last row – wrap up narration instead of copying directly
+            #     current_text = self.df.at[i, "Dialogue"]
+            #
+            #     script = self.convert_narration_to_final_wrapup(current_text=current_text)
+            #
+            #     print(f"Final Script for row {i + 1}:\n{script}\n{'-' * 50}")
+            #
+            #     parts = [p.strip() for p in script.split("<break>")]
+            #     if len(parts) == 2:
+            #         self.df.at[i, "Dialogue Enhanced"] = parts[1]
+            #     else:
+            #         self.df.at[i, "Dialogue Enhanced"] = current_text
 
-                print(f"Final Script for row {i + 1}:\n{script}\n{'-' * 50}")
-
-                parts = [p.strip() for p in script.split("<break>")]
-                if len(parts) == 2:
-                    self.df.at[i, "Dialogue Enhanced"] = parts[1]
-                else:
-                    self.df.at[i, "Dialogue Enhanced"] = current_text
         # Save results
         print(f"Saving enhanced dialogues to {self.output_csv_file_path_dialogue}")
         self.df.to_csv(str(self.output_csv_file_path_dialogue), index=False, encoding="utf-8")
@@ -342,31 +357,29 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
 
         return self.df
 
-
-    def convert_narration_to_enhanced_narration(self, current_text: str, next_teaser: str) -> str:
-
+    def convert_narration_to_enhanced_narration(self, current_text: str) -> str:
         """
-        :param current_text: Take the current dialogue
-        :param next_teaser: First few words of next dialogue (teaser only)
-        :return: Return the continuous flow for better narration
+        Enhance a single dialogue line into smoother audiobook narration.
+        No need for the next dialogue as input.
         """
 
         system_prompt = """
             You are a skilled audiobook script editor.
             Task:
-            1. Smoothly close the current narration and lightly hint towards the next teaser.
-            2. Do not repeat or narrate the full next dialogue.
-            3. Actor is always "Narrator".
-            4. Output exactly in this format (separated by <break>):
+            1. Take the given dialogue and rewrite it into a smooth narration that
+               sounds continuous and natural in an audiobook.
+            2. Do not add teasers or references to the next dialogue.
+            3. Keep the meaning intact, but improve fluency and flow.
+            4. Actor is always "Narrator".
+            5. Output exactly in this format (separated by <break>):
             Narrator <break> Enhanced Dialogue
         """
 
         user_prompt = f"""
-            Current Segment: "{current_text}"
-            Upcoming Teaser (just first words of the next line): "{next_teaser}"
-    
-            Merge these into one smooth narration. Finish the current line naturally,
-            and if needed, add a subtle link towards the upcoming teaser without repeating it fully.
+            Original Dialogue: "{current_text}"
+
+            Rewrite this into a smoother audiobook narration,
+            keeping it natural and engaging.
         """
 
         response = self.open_ai_client.responses.create(
@@ -379,36 +392,72 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
 
         return response.output_text.strip()
 
-    def convert_narration_to_final_wrapup(self, current_text: str) -> str:
-        """
-        For the last narration, provide a natural wrap-up.
-        """
-        system_prompt = """
-            You are a skilled audiobook script editor.
-            Task:
-            1. Smoothly close the narration as if it is the end of a chapter or section.
-            2. Actor is always "Narrator".
-            3. Do not hint at more content after this.
-            4. Output exactly in this format (separated by <break>):
-            Narrator <break> Final Dialogue
-        """
-
-        user_prompt = f"""
-            Final Segment: "{current_text}"
-
-            Enhance this into a natural wrap-up narration that feels complete,
-            like the closing line of a story or audiobook section.
-        """
-
-        response = self.open_ai_client.responses.create(
-            model=self.open_ai_text_model,
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ]
-        )
-
-        return response.output_text.strip()
+    # def convert_narration_to_enhanced_narration(self, current_text: str, next_teaser: str) -> str:
+    #
+    #     """
+    #     :param current_text: Take the current dialogue
+    #     :param next_teaser: First few words of next dialogue (teaser only)
+    #     :return: Return the continuous flow for better narration
+    #     """
+    #
+    #     system_prompt = """
+    #         You are a skilled audiobook script editor.
+    #         Task:
+    #         1. Smoothly close the current narration and lightly hint towards the next teaser.
+    #         2. Do not repeat or narrate the full next dialogue.
+    #         3. Actor is always "Narrator".
+    #         4. Output exactly in this format (separated by <break>):
+    #         Narrator <break> Enhanced Dialogue
+    #     """
+    #
+    #     user_prompt = f"""
+    #         Current Segment: "{current_text}"
+    #         Upcoming Teaser (just first words of the next line): "{next_teaser}"
+    #
+    #         Merge these into one smooth narration. Finish the current line naturally,
+    #         and if needed, add a subtle link towards the upcoming teaser without repeating it fully.
+    #     """
+    #
+    #     response = self.open_ai_client.responses.create(
+    #         model=self.open_ai_text_model,
+    #         input=[
+    #             {"role": "system", "content": system_prompt},
+    #             {"role": "user", "content": user_prompt}
+    #         ]
+    #     )
+    #
+    #     return response.output_text.strip()
+    #
+    # def convert_narration_to_final_wrapup(self, current_text: str) -> str:
+    #     """
+    #     For the last narration, provide a natural wrap-up.
+    #     """
+    #     system_prompt = """
+    #         You are a skilled audiobook script editor.
+    #         Task:
+    #         1. Smoothly close the narration as if it is the end of a chapter or section.
+    #         2. Actor is always "Narrator".
+    #         3. Do not hint at more content after this.
+    #         4. Output exactly in this format (separated by <break>):
+    #         Narrator <break> Final Dialogue
+    #     """
+    #
+    #     user_prompt = f"""
+    #         Final Segment: "{current_text}"
+    #
+    #         Enhance this into a natural wrap-up narration that feels complete,
+    #         like the closing line of a story or audiobook section.
+    #     """
+    #
+    #     response = self.open_ai_client.responses.create(
+    #         model=self.open_ai_text_model,
+    #         input=[
+    #             {"role": "system", "content": system_prompt},
+    #             {"role": "user", "content": user_prompt}
+    #         ]
+    #     )
+    #
+    #     return response.output_text.strip()
 
 
     def convert_background_activites_and_dialogues_to_musical_prompt_iterrator(self, df: pandas.DataFrame) -> pandas.DataFrame:
@@ -549,7 +598,7 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
             output_path = row['Speech Output Path'].strip()
 
             output_path = os.path.join(str(narration_output_dir), output_path).replace('\\', '/')
-            row['Speech Output Path'] = output_path
+            df.at[index, 'Speech Output Path'] = output_path
 
             # Generate speech with specified emotion and speaker
             self.convert_text_to_speech(text=text,
@@ -558,7 +607,7 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
                                         language='en')
 
             # Add speech duration to the dataframe
-            row['Speech Duration'] = f'{self.get_wav_duration(output_path):.2f}'
+            df.at[index, 'Speech Duration'] = f'{self.get_wav_duration(output_path):.2f}'
 
         # Save the updated dataframe with speech output paths and durations
         df.to_csv(str(self.output_csv_file_path_dialogue), index=False, encoding="utf-8")
@@ -952,19 +1001,16 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
 
         return duration_sec
 
-    def merge_wavs(self, df: pandas.DataFrame , crossfade_ms: int = 1000) -> None :
+    def merge_wavs(self, df: pandas.DataFrame, crossfade_ms: int = 100, silence_ms: int = 500) -> None:
         """
-        Merge multiple wav files listed in a CSV into one file with smooth transitions.
+        Merge multiple wav files listed in a DataFrame into one file with smooth transitions and natural pauses.
 
         Args:
-            csv_path (str): Path to CSV file containing wav file paths.
-            column_name (str): Column name in CSV that holds relative wav paths.
-            base_dir (str): Base directory for the wav files (e.g., D:/Vakta/).
-            output_path (str): Path where merged wav will be saved.
+            df (pd.DataFrame): DataFrame with column "Narration with Background Music Output Path".
             crossfade_ms (int): Crossfade duration in milliseconds between clips.
+            silence_ms (int): Silence duration (pause) in milliseconds between clips.
         """
 
-        # Initialize an empty audio segment
         final_audio = None
 
         for idx, row in df.iterrows():
@@ -976,11 +1022,13 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
 
             # Load wav file
             audio = AudioSegment.from_wav(file_path)
+            audio = audio.fade_in(200)  # 200ms smooth fade-in
 
             if final_audio is None:
                 final_audio = audio
             else:
-                # Append with crossfade
+                # Add a silence gap before appending next clip
+                final_audio += AudioSegment.silent(duration=silence_ms)
                 final_audio = final_audio.append(audio, crossfade=crossfade_ms)
 
             print(f"✅ Added: {file_path}")
@@ -1075,36 +1123,36 @@ if __name__ == '__main__' :
             background_music_model= background_music_model
         )
 
-        print("Step 1: Extracting text from PDF")
-        df = narration.extract_text_from_pdf(pdf_path= narration.pdf_path,
-                                             start_page= narration.pdf_start_page,
-                                             end_page= narration.pdf_end_page,
-                                             output_csv_file_name= narration.output_csv_file_path)
+        # print("Step 1: Extracting text from PDF")
+        # df = narration.extract_text_from_pdf(pdf_path= narration.pdf_path,
+        #                                      start_page= narration.pdf_start_page,
+        #                                      end_page= narration.pdf_end_page,
+        #                                      output_csv_file_name= narration.output_csv_file_path)
 
-        print(f"Step 2 : Cleaning the extractd text saved in {narration.output_csv_file_path}")
-        df = narration.clean_ocr_text_iterrator(df= df)
+        # print(f"Step 2 : Cleaning the extractd text saved in {narration.output_csv_file_path}")
+        # df = narration.clean_ocr_text_iterrator(df= df)
+        #
+        # print(f"Step 3: Converting cleaned text to narration dialogues ...")
+        # df = narration.generate_script_iterrator(df= df)
 
-        print(f"Step 3: Converting cleaned text to narration dialogues ...")
-        df = narration.generate_script_iterrator(df= df)
+        # print("Step 4: Converting narration to enhanced narration...")
+        # df = narration.convert_narration_to_enhanced_narration_iterrator(df= df)
+        #
+        # print("Step 5: Converting background activities to musical prompt...")
+        # df = narration.convert_background_activites_and_dialogues_to_musical_prompt_iterrator(df= df)
+        #
+        # print("Step 6: Narration Validation")
+        # narration.narration_check(df= df)
 
-        print("Step 4: Converting narration to enhanced narration...")
-        df = narration.convert_narration_to_enhanced_narration_iterrator(df= df)
+        # print("Step 7: Converting narration dialogues to speech using XTTS v2...")
+        # df = narration.convert_text_to_speech_iterrator(df= df)
 
-        print("Step 5: Converting background activities to musical prompt...")
-        df = narration.convert_background_activites_and_dialogues_to_musical_prompt_iterrator(df= df)
+        # print("Step 8: Generating background music for each narration dialogue...")
+        # torch.cuda.empty_cache()
+        # df = narration.generate_background_music_iterator(df)
 
-        print("Step 6: Narration Validation")
-        narration.narration_check(df= df)
-
-        print("Step 7: Converting narration dialogues to speech using XTTS v2...")
-        df = narration.convert_text_to_speech_iterrator(df= df)
-
-        print("Step 8: Generating background music for each narration dialogue...")
-        torch.cuda.empty_cache()
-        df = narration.generate_background_music_iterator(df)
-
-        print("Step 9: Merging the narration and background music ...")
-        df = narration.merge_narration_background_music_iterrator(df)
+        # print("Step 9: Merging the narration and background music ...")
+        # df = narration.merge_narration_background_music_iterrator(df)
 
         print("Step 10 : Need to merge all different chunks into a single file ...")
         df = pd.read_csv(output_csv_file_path_dialogue)
