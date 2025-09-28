@@ -31,7 +31,7 @@ from openai import OpenAI
 from pydub import AudioSegment
 from tqdm import tqdm
 
-from config.audio_reference_samples import ENG_UK_DAVID, ENG_UK_HUME_DIR, ENG_INDIAN_MALE_DIR, ENG_INDIAN_FEMALE_DIR
+from config.audio_reference_samples import ENG_UK_HUME_DIR, ENG_INDIAN_MALE_DIR, ENG_INDIAN_FEMALE_DIR
 from config.background_music_models import MUSIC_GEN_MELODY
 from config.open_ai_config import API_KEY, TEXT_MODEL
 from config.tts_model_config import XTTS_V2
