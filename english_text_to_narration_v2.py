@@ -23,6 +23,7 @@ import numpy as np
 import pandas
 import pandas as pd
 import soundfile as sf
+import torch
 import torchaudio
 from TTS.api import TTS
 from audiocraft.models import MusicGen
@@ -30,13 +31,14 @@ from openai import OpenAI
 from pydub import AudioSegment
 from tqdm import tqdm
 
-from config.audio_reference_samples import ENG_UK_DAVID
+from config.audio_reference_samples import ENG_UK_DAVID, ENG_UK_HUME_DIR, ENG_INDIAN_MALE_DIR, ENG_INDIAN_FEMALE_DIR
 from config.background_music_models import MUSIC_GEN_MELODY
 from config.open_ai_config import API_KEY, TEXT_MODEL
 from config.tts_model_config import XTTS_V2
 from interfaces.narration import NarrationInterface
 from interfaces.ocr import OCRInterface
-import torch
+from transformers import pipeline
+
 
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_THREADING_LAYER"] = "GNU"
@@ -61,7 +63,7 @@ def get_arguments():
     parser.add_argument('--output_csv_file_name_dialogue', type=str, default='narration_dialogues.csv', help='Path to save the narration dialogues as CSV.')
 
     # Step 7 : Convert the TTS
-    parser.add_argument('--reference_wav', type=str, default= ENG_UK_DAVID, help='Path to the reference audio file for TTS synthesis.')
+    parser.add_argument('--reference_wav_dir', type=str, default= ENG_INDIAN_FEMALE_DIR, help='Path to the reference audio file for TTS synthesis.')
     parser.add_argument("--tts_model_name", type=str, default= XTTS_V2, help="Name of the TTS model to use")
 
     # Step 8 : Background Music Generation
@@ -74,7 +76,7 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
     def __init__(self, pdf_path: str, pdf_start_page: int, pdf_end_page: int,
                  device: str, output_csv_file_path: str,
                  openai_api_key: str, open_ai_text_model: str,
-                 output_csv_file_path_dialogue: str, reference_wav: str,
+                 output_csv_file_path_dialogue: str, reference_wav_dir: str,
                  tts_model_name: str, background_music_model: str)  :
 
         self.pdf_path = pdf_path
@@ -84,7 +86,7 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         self.output_csv_file_path = output_csv_file_path
         self.openai_api_key = openai_api_key
         self.output_csv_file_path_dialogue = output_csv_file_path_dialogue
-        self.reference_wav = reference_wav
+        self.reference_wav_dir = reference_wav_dir
         self.tts_model_name = tts_model_name
         self.background_music_model_name = background_music_model
 
@@ -102,7 +104,12 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         self.df : pandas.DataFrame = None
         self.df_dialogues : pandas.DataFrame = None
 
-        return
+        # List of voice emmotions available in audio reference samples
+        self.voice_artist_emmotions = []
+        for file_name in os.listdir(self.reference_wav_dir) :
+            if file_name.lower().endswith(".wav"):  # check for .wav files
+                name_without_ext = os.path.splitext(file_name)[0]  # remove extension
+                self.voice_artist_emmotions.append(name_without_ext)
 
     def extract_text_from_pdf(self, pdf_path: str, start_page: int, end_page: int,
                               output_csv_file_name: str) -> pandas.DataFrame:
@@ -313,6 +320,7 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
                 print(f"⚠️ Unexpected format at row {i + 1}: {script}")
                 self.df.at[i, "Dialogue Enhanced"] = current_text  # fallback
 
+
         # Save results
         print(f"Saving enhanced dialogues to {self.output_csv_file_path_dialogue}")
         self.df.to_csv(str(self.output_csv_file_path_dialogue), index=False, encoding="utf-8")
@@ -498,8 +506,8 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
             # Generate speech with specified emotion and speaker
             self.convert_text_to_speech(text=text,
                                         output_path=output_path,
-                                        reference_wav=args.reference_wav,
-                                        language='en')
+                                        reference_wav_dir=self.reference_wav_dir,
+                                        language='en', emotion= emotion)
 
             # Add speech duration to the dataframe
             df.at[index, 'Speech Duration'] = f'{self.get_wav_duration(output_path):.2f}'
@@ -511,7 +519,7 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
 
         return df
 
-    def convert_text_to_speech(self, text: str, reference_wav: str, output_path: str, language: str = "en") -> None:
+    def convert_text_to_speech(self, text: str, reference_wav_dir: str, output_path: str, emotion: str, language: str = "en") -> None:
 
         """
         Generate speech using XTTS v2 by cloning reference voice.
@@ -520,6 +528,14 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         - output_path: where to save generated audio
         - language: target language (e.g., 'en', 'hi')
         """
+
+        voice_artist_emmotion_classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
+        voice_artist_emmotion_classifier_result = voice_artist_emmotion_classifier(emotion, candidate_labels=self.voice_artist_emmotions)
+        highest_index = voice_artist_emmotion_classifier_result['scores'].index(max(voice_artist_emmotion_classifier_result['scores']))
+        file_name = voice_artist_emmotion_classifier_result['labels'][highest_index]
+        reference_wav = os.path.join(reference_wav_dir, f"{file_name}.wav").replace('\\', '/')
+        print(f"Generating audio for sentence with emotion '{file_name}' and reference '{reference_wav}'...")
+
         # Generate speech
         all_audio = []
 
@@ -953,7 +969,7 @@ if __name__ == '__main__' :
     openai_api_key = args.openai_api_key
     open_ai_text_model = args.open_ai_text_model
     output_csv_file_name_dialogue = args.output_csv_file_name_dialogue
-    reference_wav = args.reference_wav
+    reference_wav_dir = args.reference_wav_dir
     tts_model_name = args.tts_model_name
     background_music_model = args.background_music_model
 
@@ -966,7 +982,7 @@ if __name__ == '__main__' :
     print(f"OpenAI API Key: {openai_api_key}")
     print(f"OpenAI Text Model: {open_ai_text_model}")
     print(f"Output CSV File Name Dialogue: {output_csv_file_name_dialogue}")
-    print(f"Reference WAV: {reference_wav}")
+    print(f"Reference WAV: {reference_wav_dir}")
     print(f"TTS Model Name: {tts_model_name}")
     print(f"Background Music Model : {background_music_model}")
 
@@ -1013,38 +1029,39 @@ if __name__ == '__main__' :
             openai_api_key=openai_api_key,
             open_ai_text_model=open_ai_text_model,
             output_csv_file_path_dialogue=output_csv_file_path_dialogue,
-            reference_wav=reference_wav,
+            reference_wav_dir =reference_wav_dir,
             tts_model_name=tts_model_name,
             background_music_model= background_music_model
         )
 
-        print("Step 1: Extracting text from PDF")
-        df = narration.extract_text_from_pdf(pdf_path= narration.pdf_path,
-                                             start_page= narration.pdf_start_page,
-                                             end_page= narration.pdf_end_page,
-                                             output_csv_file_name= narration.output_csv_file_path)
-
-        print(f"Step 2 : Cleaning the extractd text saved in {narration.output_csv_file_path}")
-        df = narration.clean_ocr_text_iterrator(df= df)
-
-        print(f"Step 3: Converting cleaned text to narration dialogues ...")
-        df = narration.generate_script_iterrator(df= df)
-
-        print("Step 4: Converting narration to enhanced narration...")
-        df = narration.convert_narration_to_enhanced_narration_iterrator(df= df)
-
-        print("Step 5: Converting background activities to musical prompt...")
-        df = narration.convert_background_activites_and_dialogues_to_musical_prompt_iterrator(df= df)
-
-        print("Step 6: Narration Validation")
-        narration.narration_check(df= df)
+        # print("Step 1: Extracting text from PDF")
+        # df = narration.extract_text_from_pdf(pdf_path= narration.pdf_path,
+        #                                      start_page= narration.pdf_start_page,
+        #                                      end_page= narration.pdf_end_page,
+        #                                      output_csv_file_name= narration.output_csv_file_path)
+        #
+        # print(f"Step 2 : Cleaning the extractd text saved in {narration.output_csv_file_path}")
+        # df = narration.clean_ocr_text_iterrator(df= df)
+        #
+        # print(f"Step 3: Converting cleaned text to narration dialogues ...")
+        # df = narration.generate_script_iterrator(df= df)
+        #
+        # print("Step 4: Converting narration to enhanced narration...")
+        # df = narration.convert_narration_to_enhanced_narration_iterrator(df= df)
+        #
+        # print("Step 5: Converting background activities to musical prompt...")
+        # df = narration.convert_background_activites_and_dialogues_to_musical_prompt_iterrator(df= df)
+        #
+        # print("Step 6: Narration Validation")
+        # narration.narration_check(df= df)
 
         print("Step 7: Converting narration dialogues to speech using XTTS v2...")
+        df = pd.read_csv(output_csv_file_path_dialogue)
         df = narration.convert_text_to_speech_iterrator(df= df)
 
         print("Step 8: Generating background music for each narration dialogue...")
         torch.cuda.empty_cache()
-        df = narration.generate_background_music_iterator(df)
+        # df = narration.generate_background_music_iterator(df)
 
         print("Step 9: Merging the narration and background music ...")
         df = narration.merge_narration_background_music_iterrator(df)

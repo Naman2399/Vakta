@@ -41,7 +41,7 @@ class NarrationInterface(ABC):
         pass
 
     @abstractmethod
-    def convert_narration_to_enhanced_narration(self, current_text: str, next_text: str) -> str:
+    def convert_narration_to_enhanced_narration(self, current_text: str) -> str:
         """Save the generated narration audio to a file.
         Input Arguments:
             current_text (str): The current text segment to be narrated.
@@ -113,7 +113,7 @@ class NarrationInterface(ABC):
         pass
 
     @abstractmethod
-    def convert_text_to_speech(self, text: str, reference_wav: str, output_path: str, language: str = "en") -> None:
+    def convert_text_to_speech(self, text: str, reference_wav: str, output_path: str, emotion: str, language: str = "en") -> None:
         """Convert text to speech and save it to a file.
         Input Arguments:
             text (str): The text to be converted to speech.
