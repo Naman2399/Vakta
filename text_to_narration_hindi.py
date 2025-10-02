@@ -23,6 +23,7 @@ import numpy as np
 import pandas
 import pandas as pd
 import soundfile as sf
+import torch
 import torchaudio
 from TTS.api import TTS
 from audiocraft.models import MusicGen
@@ -30,16 +31,18 @@ from openai import OpenAI
 from pydub import AudioSegment
 from tqdm import tqdm
 
-from config.audio_reference_samples import ENG_UK_DAVID
+from config.audio_reference_samples import ENG_UK_HUME_DIR, ENG_INDIAN_MALE_DIR, ENG_INDIAN_FEMALE_DIR, \
+    HINDI_MALE_1_DIR, HINDI_FEMALE_1_DIR, HINDI_MALE_2_DIR
 from config.background_music_models import MUSIC_GEN_MELODY
 from config.open_ai_config import API_KEY, TEXT_MODEL
 from config.tts_model_config import XTTS_V2
 from interfaces.narration import NarrationInterface
 from interfaces.ocr import OCRInterface
-import torch
+from transformers import pipeline
 
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_THREADING_LAYER"] = "GNU"
+
+# os.environ["OMP_NUM_THREADS"] = "1"
+# os.environ["MKL_THREADING_LAYER"] = "GNU"
 
 def get_arguments():
 
@@ -61,7 +64,7 @@ def get_arguments():
     parser.add_argument('--output_csv_file_name_dialogue', type=str, default='narration_dialogues.csv', help='Path to save the narration dialogues as CSV.')
 
     # Step 7 : Convert the TTS
-    parser.add_argument('--reference_wav', type=str, default= ENG_UK_DAVID, help='Path to the reference audio file for TTS synthesis.')
+    parser.add_argument('--reference_wav_dir', type=str, default= HINDI_MALE_1_DIR, help='Path to the reference audio file for TTS synthesis.')
     parser.add_argument("--tts_model_name", type=str, default= XTTS_V2, help="Name of the TTS model to use")
 
     # Step 8 : Background Music Generation
@@ -69,12 +72,12 @@ def get_arguments():
 
     return parser.parse_args()
 
-class EnglishNarration(OCRInterface, NarrationInterface) :
+class HindiNarration(OCRInterface, NarrationInterface) :
 
     def __init__(self, pdf_path: str, pdf_start_page: int, pdf_end_page: int,
                  device: str, output_csv_file_path: str,
                  openai_api_key: str, open_ai_text_model: str,
-                 output_csv_file_path_dialogue: str, reference_wav: str,
+                 output_csv_file_path_dialogue: str, reference_wav_dir: str,
                  tts_model_name: str, background_music_model: str)  :
 
         self.pdf_path = pdf_path
@@ -84,7 +87,7 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         self.output_csv_file_path = output_csv_file_path
         self.openai_api_key = openai_api_key
         self.output_csv_file_path_dialogue = output_csv_file_path_dialogue
-        self.reference_wav = reference_wav
+        self.reference_wav_dir = reference_wav_dir
         self.tts_model_name = tts_model_name
         self.background_music_model_name = background_music_model
 
@@ -102,7 +105,12 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         self.df : pandas.DataFrame = None
         self.df_dialogues : pandas.DataFrame = None
 
-        return
+        # List of voice emmotions available in audio reference samples
+        self.voice_artist_emmotions = []
+        for file_name in os.listdir(self.reference_wav_dir) :
+            if file_name.lower().endswith(".wav") :  # check for .wav files
+                name_without_ext = os.path.splitext(file_name)[0]  # remove extension
+                self.voice_artist_emmotions.append(name_without_ext)
 
     def extract_text_from_pdf(self, pdf_path: str, start_page: int, end_page: int,
                               output_csv_file_name: str) -> pandas.DataFrame:
@@ -112,7 +120,7 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         """
 
         # Initialize OCR reader
-        reader = easyocr.Reader(['en'])
+        reader = easyocr.Reader(['hi', 'en'])  # Hindi + English fallback
         doc = fitz.open(pdf_path)
 
         with open(output_csv_file_name, 'w', newline='', encoding='utf-8') as csvfile:
@@ -158,27 +166,31 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         return self.df
 
     def clean_ocr_text(self, text: str) -> str:
-
         """
-            Clean the OCR text using OpenAI API to improve readability and remove errors.
-            :param text: text input
-            :return: the cleaned text
+        Clean the Hindi OCR text using OpenAI API to improve readability and remove errors.
+        :param text: Hindi OCR text input
+        :return: cleaned Hindi text
         """
 
-        system_prompt = """You are an assistant that cleans and refines OCR text while preserving its meaning. 
-                           Your task:
-                           1. Fix spacing issues and join broken words (e.g., "examp le" → "example").
-                           2. Remove unnecessary line breaks and extra spaces.
-                           3. Correct common OCR mistakes (e.g., '1' → 'l', '0' → 'o') where appropriate.
-                           4. Ensure proper capitalization and punctuation.
-                           5. Remove exact duplicate phrases or sentences if they appear in the text.
-                           6. Eliminate filler or meaningless words that disrupt readability.
-                           7. Smooth the flow so the text reads naturally, while keeping the original meaning intact.
+        system_prompt = """आप एक सहायक हैं जिसका कार्य OCR से निकले हुए हिंदी टेक्स्ट को
+                           पढ़ने योग्य और स्वाभाविक बनाना है। 
+                           आपका काम:
+                           1. गलत स्पेसिंग और टूटी हुई मात्राएँ/शब्दों को सही करना 
+                              (जैसे "ज िवन" → "जीवन")।
+                           2. अनावश्यक लाइन ब्रेक और अतिरिक्त स्पेस हटाना।
+                           3. आम OCR गलतियाँ सुधारना 
+                              (जैसे "॥" को सही जगह लगाना, "।" का गलत प्रयोग ठीक करना)।
+                           4. उचित विराम चिह्न (। , ? ! आदि) लगाना।
+                           5. एक जैसे वाक्यांश या वाक्य दोहराए गए हों तो हटाना।
+                           6. बेमतलब या अस्पष्ट अक्षर/शब्द हटाना।
+                           7. वाक्य को स्वाभाविक और सरल हिंदी प्रवाह में सुधारना, 
+                              लेकिन मूल अर्थ को बदले बिना।
 
-                           Output only the cleaned and improved text without any commentary or explanation."""
+                           आउटपुट केवल सुधारा हुआ टेक्स्ट हो, 
+                           किसी प्रकार की टिप्पणी या व्याख्या न दें।"""
 
-        user_prompt = f"""Clean, correct, and improve the following OCR text:
-               \"\"\"{text}\"\"\""""
+        user_prompt = f"""निम्न OCR से प्राप्त हिंदी टेक्स्ट को सुधारें और पठनीय बनाएं:
+        \"\"\"{text}\"\"\""""
 
         response = self.open_ai_client.responses.create(
             model=self.open_ai_text_model,
@@ -249,32 +261,35 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         """
 
         system_prompt = """
-                    You are a scriptwriter for an audiobook where the narrator tells the story as a continuous, immersive script. 
-                    Follow these principles:
-                    1. The 'Actor' will always be "Narrator".
-                    2. 'Dialogue' must be expressive, descriptive, and sound like a storyteller speaking to an audience. 
-                       - Merge multiple related ideas into a single, flowing narration. 
-                       - Each dialogue block should feel substantial (at least 4–6 sentences), painting vivid imagery and smoothly linking events.
-                    3. 'Emotion' should reflect the overall mood or tone of the narration (can have more than one word, e.g., "calm and hopeful").
-                    4. 'Background Activities' should describe subtle but fitting ambient sounds or music cues (e.g., "soft flute music", "birds chirping in distance").
-                    5. Avoid breaking the narration into too many short lines — prioritize fewer, longer segments that carry the story forward.
+        आप एक ऑडियोबुक स्क्रिप्ट लेखक हैं, जहाँ वाचक (Narrator) कहानी को एक निरंतर, रोचक और भावनात्मक ढंग से सुनाता है। 
+        नियम इस प्रकार हैं:
+        1. 'Actor' हमेशा "Narrator" होगा।
+        2. 'Dialogue' अभिव्यक्तिपूर्ण, चित्रात्मक और श्रोताओं से संवाद जैसा होना चाहिए।
+           - जुड़े हुए विचारों को एक ही प्रवाहपूर्ण वर्णन में मिलाएँ।
+           - हर संवाद खंड कम से कम 4–6 वाक्यों का हो, जो दृश्य और भावनाएँ स्पष्ट रूप से चित्रित करे।
+        3. 'Emotion' संवाद की मुख्य भावना या मूड को दर्शाए (एक से अधिक शब्द हो सकते हैं, जैसे "शांत और आशावान", "उदास और गंभीर")।
+        4. 'Background Activities' में हल्की लेकिन उपयुक्त ध्वनियों या संगीत का वर्णन हो 
+           (जैसे "मंद बांसुरी की धुन", "पक्षियों की चहचहाहट", "हल्की हवा की सरसराहट")।
+        5. संवाद को बहुत छोटे-छोटे भागों में न बाँटें — कहानी को आगे बढ़ाने वाले लंबे खंड बनाएँ।
 
-                    Output format:
-                    - Output as below structure with separated by tag <break>.
-                    - Each line should follow the structure:
-                      Actor <break> Dialogue <break> Emotion <break> Background Activities
-                    - No extra commentary or explanations outside the CSV.
-                    - Do not put extra spaces after commas unless needed in the dialogue or descriptions.
+        आउटपुट प्रारूप:
+        - हर पंक्ति <break> से अलग होगी।
+        - संरचना इस प्रकार होगी:
+          Actor <break> Dialogue <break> Emotion <break> Background Activities
+        - आउटपुट में अतिरिक्त टिप्पणी या व्याख्या न दें।
+        - कॉमा के बाद केवल वहीं स्पेस दें जहाँ वाक्य संरचना में ज़रूरी हो।
 
-                    Example:
-                    Narrator <break> "Once upon a time, in a land far away, there lived a wise old king whose wisdom was sought by rulers from distant lands. His palace, with its golden domes and fragrant gardens, was a place of peace and reflection." <break> calm and nostalgic <break> "gentle harp music"
-                    Narrator <break> "One day, as the sun dipped low and painted the sky in shades of crimson, a weary messenger rode into the palace courtyard, carrying a letter sealed with urgency. The air grew heavy with anticipation as the king broke the seal." <break> tense and serious <break> "distant thunder"
-                    """
+        उदाहरण:
+        Narrator <break> "बहुत समय पहले, एक विशाल साम्राज्य में एक बुद्धिमान राजा रहता था। उसकी दयालुता और न्यायप्रियता दूर-दूर तक प्रसिद्ध थी। उसका महल सोने के गुम्बदों और सुगंधित उद्यानों से भरा हुआ था, जहाँ हर कोई शांति और सुकून महसूस करता था।" <break> शांत और स्मृतिपूर्ण <break> "मंद सितार की धुन"
+        Narrator <break> "एक दिन, जब सूर्य अस्त हो रहा था और आकाश लालिमा से भर गया था, तभी एक थका हुआ संदेशवाहक महल के द्वार पर पहुँचा। उसके हाथों में एक मुहरबंद पत्र था, और वातावरण में उत्सुकता और गंभीरता की लहर दौड़ गई।" <break> गंभीर और तनावपूर्ण <break> "दूर से आती बादलों की गड़गड़ाहट"
+        """
 
-        user_prompt = f"""Convert the following text into a structured drama script as per the rules, ensuring fewer but longer narrations.
+        user_prompt = f"""निम्नलिखित पाठ को दिए गए नियमों के अनुसार 
+        एक संरचित नाटकीय स्क्रिप्ट में बदलें, यह सुनिश्चित करते हुए कि 
+        कम लेकिन लंबे नैरेशन हों। 
 
-                    Text for this page (with 50 words from the previous page for context):
-                    \"\"\"{prev_text} {current_text}\"\"\""""
+        इस पृष्ठ का पाठ (पिछले पृष्ठ से 50 शब्द संदर्भ सहित): 
+        \"\"\"{prev_text} {current_text}\"\"\""""
 
         response = self.open_ai_client.responses.create(
             model=self.open_ai_text_model,  # Cheap and good quality
@@ -313,6 +328,7 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
                 print(f"⚠️ Unexpected format at row {i + 1}: {script}")
                 self.df.at[i, "Dialogue Enhanced"] = current_text  # fallback
 
+
         # Save results
         print(f"Saving enhanced dialogues to {self.output_csv_file_path_dialogue}")
         self.df.to_csv(str(self.output_csv_file_path_dialogue), index=False, encoding="utf-8")
@@ -322,27 +338,27 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
 
     def convert_narration_to_enhanced_narration(self, current_text: str) -> str:
         """
-        Enhance a single dialogue line into smoother audiobook narration.
-        No need for the next dialogue as input.
+        किसी एक डायलॉग को और भी सुगम व प्राकृतिक ऑडियोबुक नैरेशन में बदलना।
+        यहाँ अगले डायलॉग की ज़रूरत नहीं है।
         """
 
         system_prompt = """
-            You are a skilled audiobook script editor.
-            Task:
-            1. Take the given dialogue and rewrite it into a smooth narration that
-               sounds continuous and natural in an audiobook.
-            2. Do not add teasers or references to the next dialogue.
-            3. Keep the meaning intact, but improve fluency and flow.
-            4. Actor is always "Narrator".
-            5. Output exactly in this format (separated by <break>):
-            Narrator <break> Enhanced Dialogue
+            आप एक कुशल ऑडियोबुक स्क्रिप्ट संपादक हैं।
+            कार्य:
+            1. दिए गए संवाद (डायलॉग) को लेकर उसे एक सहज, प्रवाहपूर्ण नैरेशन में बदलें,
+               जो ऑडियोबुक में स्वाभाविक और निरंतर सुनाई दे।
+            2. अगले संवाद की ओर कोई संकेत या टीज़र न दें।
+            3. मूल अर्थ को बनाए रखें, केवल भाषा को और प्रवाहपूर्ण, श्रोताओं को जोड़ने वाला बनाएँ।
+            4. 'Actor' हमेशा "Narrator" रहेगा।
+            5. आउटपुट बिल्कुल इस प्रारूप में दें ( <break> से अलग करें ):
+               Narrator <break> सुधरा हुआ नैरेशन
         """
 
         user_prompt = f"""
-            Original Dialogue: "{current_text}"
+            मूल संवाद: "{current_text}"
 
-            Rewrite this into a smoother audiobook narration,
-            keeping it natural and engaging.
+            इसे एक और प्रवाहपूर्ण, प्राकृतिक ऑडियोबुक नैरेशन में बदलें,
+            ताकि यह सहज और रोचक लगे।
         """
 
         response = self.open_ai_client.responses.create(
@@ -388,39 +404,40 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
     def convert_background_activites_and_dialogues_to_musical_prompt(self, dialogue: str,
                                                                      background_activitiy: str) -> str:
         """
-                Generate a melodic and audience-engaging background music description
-                using dialogue + background activities.
+        डायलॉग और बैकग्राउंड गतिविधि के आधार पर,
+        एक मधुर और श्रोताओं को जोड़ने वाला संगीत वर्णन तैयार करना।
         """
 
-        # System prompt for the LLM with examples
-        system_prompt = """You are a background music designer for an audio drama.
-                    Given a dialogue line and a short description of background activity, 
-                    you must generate a *concise* and *melodic* background music prompt 
-                    that can be used with facebook/musicgen-large.
+        # System prompt for the LLM with Hindi instructions + style
+        system_prompt = """
+            आप एक ऑडियो नाटक के बैकग्राउंड म्यूज़िक डिज़ाइनर हैं।
+            दिए गए संवाद और बैकग्राउंड गतिविधि के आधार पर,
+            आपको एक *संक्षिप्त* और *संगीतात्मक* पृष्ठभूमि संगीत विवरण तैयार करना है
+            जिसे facebook/musicgen-large मॉडल के साथ प्रयोग किया जा सके।
 
-                    Rules:
-                    - Keep total description under 25 words.
-                    - Always suggest instruments and musical style.
-                    - Avoid noise-heavy sounds; make it pleasant and audience-engaging.
-                    - Music should blend with background activity but remain melodic.
-                    - Mention tempo or mood (e.g., gentle, uplifting, suspenseful).
-                    - Output must be a single line, no bullet points.
+            नियम:
+            - पूरा विवरण 25 शब्दों से कम होना चाहिए।
+            - हमेशा वाद्ययंत्रों और संगीत शैली का उल्लेख करें।
+            - शोर-भरे या कठोर ध्वनियों से बचें; संगीत मधुर और श्रोताओं को आकर्षित करने वाला हो।
+            - संगीत को बैकग्राउंड गतिविधि के साथ मिलाना है, परंतु वह प्रवाहपूर्ण और लयबद्ध रहे।
+            - टेम्पो या मूड का ज़िक्र करें (जैसे: कोमल, प्रेरणादायक, रोमांचक)।
+            - आउटपुट केवल एक पंक्ति में हो, बुलेट पॉइंट या अतिरिक्त व्याख्या न दें।
 
-                    Example outputs:
-                    1. "Gentle flute and soft tabla beats with warm strings, uplifting and calm."
-                    2. "Light acoustic guitar with soft chimes, peaceful and heartwarming."
-                    3. "Slow piano melody with soft rain sounds, reflective and soothing."
-                    4. "Bright marimba with gentle hand drums, cheerful and playful."
-                    5. "Warm cello and soft piano with light harp plucks, romantic and tender."
-                    """
+            उदाहरण आउटपुट:
+            1. "मृदु बाँसुरी और हल्की तबला ताल के साथ गर्मजोशी भरे स्ट्रिंग्स, शांत और प्रेरणादायक।"
+            2. "हल्का एकॉस्टिक गिटार और कोमल घंटियाँ, सुकूनदायक और दिल को छू लेने वाला।"
+            3. "धीमी पियानो धुन और हल्की बारिश की ध्वनि, चिंतनशील और सुकूनदायक।"
+            4. "चमकदार मरिम्बा और कोमल हेंड ड्रम्स, चंचल और हर्षित।"
+            5. "गर्म सेलो और कोमल पियानो के साथ हल्के हार्प प्लक्स, रोमांटिक और कोमल।"
+        """
 
-        # Create the combined input
+        # Combined input
         user_prompt = f"""
-                    Dialogue: {dialogue}
-                    Background Activity: {background_activitiy}
+            संवाद: {dialogue}
+            बैकग्राउंड गतिविधि: {background_activitiy}
 
-                    Now generate one line of background music description:
-                """
+            अब एक पंक्ति में बैकग्राउंड संगीत का विवरण तैयार करें:
+        """
 
         response = self.open_ai_client.responses.create(
             model=self.open_ai_text_model,  # Cheap and good quality
@@ -498,8 +515,8 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
             # Generate speech with specified emotion and speaker
             self.convert_text_to_speech(text=text,
                                         output_path=output_path,
-                                        reference_wav=args.reference_wav,
-                                        language='en')
+                                        reference_wav_dir=self.reference_wav_dir,
+                                        language='hi', emotion= emotion)
 
             # Add speech duration to the dataframe
             df.at[index, 'Speech Duration'] = f'{self.get_wav_duration(output_path):.2f}'
@@ -511,7 +528,7 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
 
         return df
 
-    def convert_text_to_speech(self, text: str, reference_wav: str, output_path: str, language: str = "en") -> None:
+    def convert_text_to_speech(self, text: str, reference_wav_dir: str, output_path: str, emotion: str, language: str = "en") -> None:
 
         """
         Generate speech using XTTS v2 by cloning reference voice.
@@ -520,6 +537,14 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
         - output_path: where to save generated audio
         - language: target language (e.g., 'en', 'hi')
         """
+
+        voice_artist_emmotion_classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
+        voice_artist_emmotion_classifier_result = voice_artist_emmotion_classifier(emotion, candidate_labels=self.voice_artist_emmotions)
+        highest_index = voice_artist_emmotion_classifier_result['scores'].index(max(voice_artist_emmotion_classifier_result['scores']))
+        file_name = voice_artist_emmotion_classifier_result['labels'][highest_index]
+        reference_wav = os.path.join(reference_wav_dir, f"{file_name}.wav").replace('\\', '/')
+        print(f"Generating audio for sentence with emotion '{file_name}' and reference '{reference_wav}'...")
+
         # Generate speech
         all_audio = []
 
@@ -939,6 +964,48 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
 
         return
 
+    def change_language_iterrator(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Convert Hindi text in Emotion, Background Activity, and Musical Prompt
+        columns into English for all rows in the DataFrame.
+        """
+        target_columns = ["Emotion", "Background Activity", "Musical Prompt"]
+
+        for col in target_columns:
+            if col in df.columns:
+                df[col] = df[col].apply(lambda x: self.change_language(x))
+
+        print(f"Saving language converted dialogues to {self.output_csv_file_path_dialogue}")
+        df.to_csv(str(self.output_csv_file_path_dialogue), index=False, encoding="utf-8")
+        return df
+
+    def change_language(self, text: str) -> str:
+        """
+        Convert Hindi text into English while keeping tone and meaning intact.
+        """
+
+        system_prompt = """You are a professional translator.
+        Your task:
+        - Translate the given Hindi text into fluent, natural English.
+        - Preserve tone, meaning, and cultural nuance.
+        - Keep the translation concise and audience-friendly.
+        - Do not add explanations, output only the translated text.
+        """
+
+        user_prompt = f"""Translate the following Hindi text into English:
+        \"\"\"{text}\"\"\""""
+
+        response = self.open_ai_client.responses.create(
+            model=self.open_ai_text_model,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+        )
+
+        return response.output_text.strip()
+
+
 if __name__ == '__main__' :
 
     # Parse the arguments
@@ -953,7 +1020,7 @@ if __name__ == '__main__' :
     openai_api_key = args.openai_api_key
     open_ai_text_model = args.open_ai_text_model
     output_csv_file_name_dialogue = args.output_csv_file_name_dialogue
-    reference_wav = args.reference_wav
+    reference_wav_dir = args.reference_wav_dir
     tts_model_name = args.tts_model_name
     background_music_model = args.background_music_model
 
@@ -966,7 +1033,7 @@ if __name__ == '__main__' :
     print(f"OpenAI API Key: {openai_api_key}")
     print(f"OpenAI Text Model: {open_ai_text_model}")
     print(f"Output CSV File Name Dialogue: {output_csv_file_name_dialogue}")
-    print(f"Reference WAV: {reference_wav}")
+    print(f"Reference WAV: {reference_wav_dir}")
     print(f"TTS Model Name: {tts_model_name}")
     print(f"Background Music Model : {background_music_model}")
 
@@ -1004,7 +1071,7 @@ if __name__ == '__main__' :
         print(f"CSV Dialogue path : {output_csv_file_path_dialogue}")
 
         # Create an instance of the EnglishNarration class
-        narration = EnglishNarration(
+        narration = HindiNarration(
             pdf_path=pdf_path,
             pdf_start_page=start_page,
             pdf_end_page=end_page,
@@ -1013,7 +1080,7 @@ if __name__ == '__main__' :
             openai_api_key=openai_api_key,
             open_ai_text_model=open_ai_text_model,
             output_csv_file_path_dialogue=output_csv_file_path_dialogue,
-            reference_wav=reference_wav,
+            reference_wav_dir =reference_wav_dir,
             tts_model_name=tts_model_name,
             background_music_model= background_music_model
         )
@@ -1039,7 +1106,11 @@ if __name__ == '__main__' :
         print("Step 6: Narration Validation")
         narration.narration_check(df= df)
 
+        print("Step 6.1: Changing language from Hindi to English for Emotion, Background Activity and Musical Prompt...")
+        df = narration.change_language_iterrator(df=df)
+
         print("Step 7: Converting narration dialogues to speech using XTTS v2...")
+        df = pd.read_csv(output_csv_file_path_dialogue)
         df = narration.convert_text_to_speech_iterrator(df= df)
 
         print("Step 8: Generating background music for each narration dialogue...")
@@ -1056,3 +1127,6 @@ if __name__ == '__main__' :
         # TODO : Next Step
 
         print("All Task Completed")
+
+
+

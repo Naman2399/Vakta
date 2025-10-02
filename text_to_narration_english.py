@@ -31,7 +31,7 @@ from openai import OpenAI
 from pydub import AudioSegment
 from tqdm import tqdm
 
-from config.audio_reference_samples import ENG_UK_HUME_DIR, ENG_INDIAN_MALE_DIR, ENG_INDIAN_FEMALE_DIR
+from config.audio_reference_samples import ENG_UK_HUME_DIR, ENG_INDIAN_MALE_DIR, ENG_INDIAN_FEMALE_DIR, HINDI_MALE_1_DIR
 from config.background_music_models import MUSIC_GEN_MELODY
 from config.open_ai_config import API_KEY, TEXT_MODEL
 from config.tts_model_config import XTTS_V2
@@ -48,9 +48,9 @@ def get_arguments():
     parser = argparse.ArgumentParser(description="Convert the English Story PDF to narration speech and background music.")
 
     # Step1 : Extract text from the PDF using OCR and save it to a CSV file.
-    parser.add_argument('--pdf_path', type=str, default= "books/sample_v2/book.pdf",help='Path to the input PDF file.')
-    parser.add_argument('---pdf_start_page', type=int, default=5, help='Start page number for text extraction.')
-    parser.add_argument('--pdf_end_page', type=int, default=9, help='End page number for text extraction.')
+    parser.add_argument('--pdf_path', type=str, default= "books/sample_hindi_story/book.pdf",help='Path to the input PDF file.')
+    parser.add_argument('---pdf_start_page', type=int, default=1, help='Start page number for text extraction.')
+    parser.add_argument('--pdf_end_page', type=int, default=3, help='End page number for text extraction.')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use for OCR processing (e.g., "cpu" or "cuda").')
     # Output csv path ---> The output directory will be same as that of pdf_path, with the output file name specified.
     parser.add_argument('--output_csv_file_name', type=str, default='extracted_text.csv', help='Path to save the extracted text as CSV.')
@@ -63,7 +63,7 @@ def get_arguments():
     parser.add_argument('--output_csv_file_name_dialogue', type=str, default='narration_dialogues.csv', help='Path to save the narration dialogues as CSV.')
 
     # Step 7 : Convert the TTS
-    parser.add_argument('--reference_wav_dir', type=str, default= ENG_INDIAN_FEMALE_DIR, help='Path to the reference audio file for TTS synthesis.')
+    parser.add_argument('--reference_wav_dir', type=str, default= HINDI_MALE_1_DIR, help='Path to the reference audio file for TTS synthesis.')
     parser.add_argument("--tts_model_name", type=str, default= XTTS_V2, help="Name of the TTS model to use")
 
     # Step 8 : Background Music Generation
