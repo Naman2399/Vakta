@@ -32,7 +32,7 @@ from pydub import AudioSegment
 from tqdm import tqdm
 
 from config.audio_reference_samples import ENG_UK_HUME_DIR, ENG_INDIAN_MALE_DIR, ENG_INDIAN_FEMALE_DIR, \
-    HINDI_MALE_1_DIR, HINDI_FEMALE_1_DIR, HINDI_MALE_2_DIR
+    HINDI_MALE_1_DIR, HINDI_FEMALE_1_DIR, HINDI_MALE_2_DIR, HINDI_FEMALE_2_DIR
 from config.background_music_models import MUSIC_GEN_MELODY
 from config.open_ai_config import API_KEY, TEXT_MODEL
 from config.tts_model_config import XTTS_V2
@@ -64,13 +64,164 @@ def get_arguments():
     parser.add_argument('--output_csv_file_name_dialogue', type=str, default='narration_dialogues.csv', help='Path to save the narration dialogues as CSV.')
 
     # Step 7 : Convert the TTS
-    parser.add_argument('--reference_wav_dir', type=str, default= HINDI_MALE_1_DIR, help='Path to the reference audio file for TTS synthesis.')
+    parser.add_argument('--reference_wav_dir', type=str, default= HINDI_FEMALE_2_DIR, help='Path to the reference audio file for TTS synthesis.')
     parser.add_argument("--tts_model_name", type=str, default= XTTS_V2, help="Name of the TTS model to use")
 
     # Step 8 : Background Music Generation
     parser.add_argument('--background_music_model', type=str, default= MUSIC_GEN_MELODY, help= "Model for generating the Background Music using prompt")  # Adding small model for now [Original] ---> facebook/musicgen-large
 
     return parser.parse_args()
+
+class StoryIntroGenerator:
+    def __init__(self, openai_api_key: str, openai_text_model: str, df: pd.DataFrame):
+        # Initialize OpenAI client
+        self.open_ai_client = OpenAI(api_key=openai_api_key)
+        self.open_ai_text_model = openai_text_model
+        self.df = df
+
+    def semantic_chunk_dialogues(self, df: pd.DataFrame, chunk_size=1000):
+        """
+        Splits dialogues into coherent chunks (scene-based or actor-based).
+        chunk_size: approximate number of words per chunk
+        """
+        chunks = []
+        current_chunk = []
+        current_word_count = 0
+
+        for dialogue in df["Dialogue Enhanced"]:
+            word_count = len(str(dialogue).split())
+            current_chunk.append(dialogue)
+            current_word_count += word_count
+
+            if current_word_count >= chunk_size:
+                chunks.append(" ".join(current_chunk))
+                current_chunk = []
+                current_word_count = 0
+
+        if current_chunk:
+            chunks.append(" ".join(current_chunk))
+
+        return chunks
+
+    def generate_chunk_summary(self, chunk: str) -> str:
+        """
+        Generates a very brief, high-level summary for a given chunk of dialogues.
+        Focuses only on what the story is generally about, not detailed retelling.
+        """
+        system_prompt = """आप एक संक्षिप्त कथावाचक हैं। 
+            आपको संवादों का एक हिस्सा दिया जाएगा। 
+            इन संवादों के आधार पर एक *बहुत ही छोटा, ऊपरी स्तर का सारांश* हिन्दी में लिखें।
+
+            नियम:
+            - 3 वाक्यों से कम रखें।
+            - विस्तार से घटनाओं का वर्णन न करें।
+            - केवल मुख्य विचार या विषय को पकड़ें।
+            - आउटपुट केवल छोटा हिन्दी सारांश हो, और कुछ नहीं।"""
+
+        user_prompt = f"संवाद अंश:\n{chunk}\n\nऊपरी स्तर का छोटा हिन्दी सारांश लिखें:"
+
+        response = self.open_ai_client.responses.create(
+            model=self.open_ai_text_model,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+        )
+        return response.output_text.strip()
+
+    def hierarchical_summarization_recursive(self, texts: list, chunk_limit=5, max_words=200) -> str:
+        """
+        Recursively summarizes texts until the final combined text is below max_words.
+        """
+        print(f"Processing {len(texts)} chunks...")
+
+        # Step 1: Summarize each chunk
+        mini_summaries = [self.generate_chunk_summary(text) for text in tqdm(texts)]
+
+        # Step 2: If the combined summaries are still too large, recurse
+        combined_text = " ".join(mini_summaries)
+        total_words = len(combined_text.split())
+
+        if total_words <= max_words:
+            # Small enough, return as final summary
+            return combined_text
+        else:
+            # Split mini-summaries into groups for next-level summarization
+            next_level_groups = []
+            for i in range(0, len(mini_summaries), chunk_limit):
+                group = mini_summaries[i:i + chunk_limit]
+                next_level_groups.append(" ".join(group))
+
+            # Recursive call
+            return self.hierarchical_summarization_recursive(next_level_groups, chunk_limit=chunk_limit,
+                                                             max_words=max_words)
+
+    def generate_story_intro_from_csv(self) -> str:
+        """
+        Main function to generate story introduction paragraph.
+        """
+        chunks = self.semantic_chunk_dialogues(self.df)
+        final_intro = self.hierarchical_summarization_recursive(chunks)
+        return final_intro
+
+    def generate_chunk_takeaway(self, chunk: str) -> str:
+        """
+        Generates a very brief life lesson or moral takeaway in Hindi for a chunk of dialogues.
+        """
+        system_prompt = """आप एक बुद्धिमान कथावाचक हैं। 
+        आपको संवादों का एक हिस्सा दिया जाएगा। 
+        इन संवादों के आधार पर *मुख्य जीवन सीख, नैतिक संदेश, या सार* हिन्दी में लिखें।
+
+        नियम:
+        - 2 वाक्यों से अधिक न हो।
+        - घटनाओं का विवरण न दें।
+        - केवल जीवन का संदेश या सार्वभौमिक सीख प्रस्तुत करें।
+        - आउटपुट केवल मुख्य संदेश हो, और कुछ नहीं।"""
+
+        user_prompt = f"संवाद अंश:\n{chunk}\n\nमुख्य संदेश/सार लिखें:"
+
+        response = self.open_ai_client.responses.create(
+            model=self.open_ai_text_model,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+        )
+        return response.output_text.strip()
+
+    def hierarchical_takeaway_recursive(self, texts: list, chunk_limit=5, max_words=100) -> str:
+        """
+        Recursively extracts lessons until the final takeaway is concise.
+        """
+        print(f"Processing {len(texts)} chunks for takeaways...")
+
+        # Step 1: Generate takeaway for each chunk
+        mini_takeaways = [self.generate_chunk_takeaway(text) for text in tqdm(texts)]
+
+        # Step 2: If combined is short enough, return
+        combined_text = " ".join(mini_takeaways)
+        total_words = len(combined_text.split())
+
+        if total_words <= max_words:
+            return combined_text
+        else:
+            # Group takeaways for recursive summarization
+            next_level_groups = []
+            for i in range(0, len(mini_takeaways), chunk_limit):
+                group = mini_takeaways[i:i + chunk_limit]
+                next_level_groups.append(" ".join(group))
+
+            return self.hierarchical_takeaway_recursive(next_level_groups, chunk_limit=chunk_limit,
+                                                        max_words=max_words)
+
+    def generate_story_takeaway_from_csv(self) -> str:
+        """
+        Main function to generate final story takeaway/lesson.
+        """
+        chunks = self.semantic_chunk_dialogues(self.df)
+        final_takeaway = self.hierarchical_takeaway_recursive(chunks)
+        return final_takeaway
+
 
 class HindiNarration(OCRInterface, NarrationInterface) :
 
@@ -99,7 +250,8 @@ class HindiNarration(OCRInterface, NarrationInterface) :
         self.tts = TTS(self.tts_model_name).to(self.device)
 
         # Initialize MusicGen model
-        self.musicgen_model = MusicGen.get_pretrained(self.background_music_model_name, device= self.device)
+        # self.musicgen_model = MusicGen.get_pretrained(self.background_music_model_name, device= self.device)
+        self.musicgen_model = None # Temprorary disable due to memory issues
 
         # Initialize DataFrame to hold extracted text
         self.df : pandas.DataFrame = None
@@ -503,10 +655,8 @@ class HindiNarration(OCRInterface, NarrationInterface) :
 
         # Now we will iterate through the dataframe and generate speech for each row
         for index, row in tqdm(df.iterrows(), desc="Generating Speech", total=len(df)):
-            speaker = row['Actor'].strip()
             text = row['Dialogue Enhanced'].strip()
             emotion = row['Emotion'].strip()
-            background_activities = row['Background Activity'].strip()
             output_path = row['Speech Output Path'].strip()
 
             output_path = os.path.join(str(narration_output_dir), output_path).replace('\\', '/')
@@ -956,7 +1106,7 @@ class HindiNarration(OCRInterface, NarrationInterface) :
         # Export final audio
         if final_audio:
             base_dir = os.path.dirname(self.output_csv_file_path)
-            final_audio_output_path = os.path.join(base_dir, "final.wav").replace('\\', '/')
+            final_audio_output_path = os.path.join(base_dir, "final_hindi.wav").replace('\\', '/')
             final_audio.export(final_audio_output_path, format="wav")
             print(f"🎵 Final merged audio saved at: {final_audio_output_path}")
         else:
@@ -1005,6 +1155,70 @@ class HindiNarration(OCRInterface, NarrationInterface) :
 
         return response.output_text.strip()
 
+    def convert_hindi_dialogues_to_english_iterator(self, df: pandas.DataFrame) -> tuple[pandas.DataFrame, str]:
+        """
+        :param df: Dataframe consists of ['Actor', 'Dialogue', 'Emotion', 'Background Activity', 'Dialogue Enhanced']
+        :return: Return a new column ['Dialogue Hindi'] translated from 'Dialogue Enhanced'
+        """
+
+        # Create a copy of the dataframe to avoid modifying the original
+        new_df = df.copy()
+
+        for i in tqdm(range(len(new_df)), desc="Converting Hindi dialogue to English", total=len(new_df)):
+            dialogue = new_df.iloc[i]["Dialogue Enhanced"]
+            english_dialogue = self.convert_hindi_dialogues_to_english(dialogue=dialogue)
+
+            # Debug print
+            print(f"Dialogue {i + 1} (HI): {dialogue}")
+            print(f"Dialogue {i + 1} (EN): {english_dialogue}\n{'-' * 50}")
+
+            # Update the Dialogue Enhanced column in the new dataframe
+            new_df.at[i, "Dialogue Enhanced"] = english_dialogue
+
+        # Construct a new file name for Hindi dialogues
+        english_csv_path = str(self.output_csv_file_path_dialogue).replace(".csv", "_english.csv")
+
+        print(f"Saving English dialogues to {english_csv_path}")
+        new_df.to_csv(english_csv_path, index=False, encoding="utf-8")
+        print(f"English dialogues saved to {english_csv_path}")
+
+        return new_df, english_csv_path
+
+    def convert_hindi_dialogues_to_english(self, dialogue: str) -> str:
+        """
+        Translate Hindi dialogue into smooth, natural English suitable for narration/drama.
+        """
+
+        # System prompt with strict rule
+        system_prompt = """You are a skilled translator for audio drama dialogues.
+        Given a dialogue in Hindi, translate it into natural, expressive English.
+    
+        Rules:
+        - Output ONLY the English dialogue.
+        - Do not give explanations, notes, or extra text.
+        - Preserve the emotional tone of the dialogue.
+        - Keep it concise and natural.
+    
+        Example translations:
+        Hindi: "हमें साहस के साथ लड़ना होगा, क्योंकि सत्य हमारे पक्ष में है।"
+        English: "We must fight with courage, for the truth is on our side."
+    
+        Hindi: "डरो मत मेरे मित्र, क्योंकि अंधकार के बाद हमेशा प्रकाश आता है।"
+        English: "Do not fear, my friend, for light always follows darkness."
+        """
+
+        # User input
+        user_prompt = f"Hindi: {dialogue}\nEnglish:"
+
+        response = self.open_ai_client.responses.create(
+            model=self.open_ai_text_model,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+        )
+
+        return response.output_text.strip()
 
 if __name__ == '__main__' :
 
@@ -1109,24 +1323,84 @@ if __name__ == '__main__' :
         print("Step 6.1: Changing language from Hindi to English for Emotion, Background Activity and Musical Prompt...")
         df = narration.change_language_iterrator(df=df)
 
-        print("Step 7: Converting narration dialogues to speech using XTTS v2...")
+        print("Step 7 : Generate a introduction for the story to begin with ...")
+        generator = StoryIntroGenerator(openai_api_key=openai_api_key, openai_text_model=open_ai_text_model,
+                                        df=pd.read_csv(narration.output_csv_file_path_dialogue))
+        story_intro_paragraph = generator.generate_story_intro_from_csv()
+        story_intro_paragraph += " अब, आइए कहानी में प्रवेश करते हैं।"
+        print("Story Intro:\n", story_intro_paragraph)
+
+        print("Step 8 : Generate a takeaway less for the story to end with ...")
+        story_takeaway_paragraph = generator.generate_story_takeaway_from_csv()
+        story_takeaway_paragraph = "इस कहानी से मुख्य सीख यह है: " + story_takeaway_paragraph
+        print("Story Takeaway:\n", story_takeaway_paragraph)
+
+        # Load existing narration file
+        df = pd.read_csv(narration.output_csv_file_path_dialogue)
+
+        # Intro row
+        intro_row = pd.DataFrame({
+            "Dialogue Enhanced": [story_intro_paragraph],
+            "Background Activity": ["A gentle dawn, with soft light spreading across the horizon."],
+            "Emotion": ["Anticipation, warmth, and curiosity."],
+            "Musical Prompt": ["Calm sitar with soft flute and light strings, uplifting and inviting."]
+        })
+
+        # Takeaway row
+        takeaway_row = pd.DataFrame({
+            "Dialogue Enhanced": [story_takeaway_paragraph],
+            "Background Activity": ["The sun setting slowly, with calm winds in the background."],
+            "Emotion": ["Reflection, peace, and inner clarity."],
+            "Musical Prompt": ["Gentle piano with warm cello and fading harp, thoughtful and soothing."]
+        })
+
+        # Combine intro, main dialogues, and takeaway
+        df = pd.concat([intro_row, df, takeaway_row], ignore_index=True)
+        # Save updated CSV
+        df.to_csv(narration.output_csv_file_path_dialogue, index=False, encoding="utf-8")
+        print(f"Updated CSV with intro and takeaway saved to {narration.output_csv_file_path_dialogue}")
+
+        print("Step 9: Converting narration dialogues to speech using XTTS v2...")
         df = pd.read_csv(output_csv_file_path_dialogue)
         df = narration.convert_text_to_speech_iterrator(df= df)
 
-        print("Step 8: Generating background music for each narration dialogue...")
+        print("Step 10: Generating background music for each narration dialogue...")
         torch.cuda.empty_cache()
         df = narration.generate_background_music_iterator(df)
 
-        print("Step 9: Merging the narration and background music ...")
+        print("Step 11: Merging the narration and background music ...")
+        df = pd.read_csv(output_csv_file_path_dialogue)
         df = narration.merge_narration_background_music_iterrator(df)
 
-        print("Step 10 : Need to merge all different chunks into a single file ...")
+        print("Step 12 : Need to merge all different chunks into a single file ...")
         narration.merge_wavs(df)
 
-        print("Step 11 : Need to create video for each different prompt and need to save them ...")
+        print("Step 13 : Convert the Hindi Dialogue to Other Language ...")
+
+        print("Step 13.1 : Converting to English ...")
+        df = pd.read_csv(narration.output_csv_file_path_dialogue)
+        df, output_csv_file_path_dialogue_english = narration.convert_hindi_dialogues_to_english_iterator(df)
+        reference_wav_dir = ENG_INDIAN_MALE_DIR
+
+        print("Step 13.1.1 : Now need to repeat the steps 7, 8, 9, 10 for English ...")
+        # narration_english = EnglishNarration(
+        #     pdf_path=pdf_path,
+        #     pdf_start_page=start_page,
+        #     pdf_end_page=end_page,
+        #     device=device,
+        #     output_csv_file_path=output_csv_file_path,
+        #     openai_api_key=openai_api_key,
+        #     open_ai_text_model=open_ai_text_model,
+        #     output_csv_file_path_dialogue=output_csv_file_path_dialogue_english,
+        #     reference_wav_dir=reference_wav_dir,
+        #     tts_model_name=tts_model_name,
+        #     background_music_model=background_music_model
+        # )
+        # df = narration_english.convert_text_to_speech_iterrator(df=df)
+        # df = narration_english.merge_narration_background_music_iterrator(df)
+        # narration_english.merge_wavs(df)
+
+        print("Step 14 : Need to create video for each different prompt and need to save them ...")
         # TODO : Next Step
 
         print("All Task Completed")
-
-
-
