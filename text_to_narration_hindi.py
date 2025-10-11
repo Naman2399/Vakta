@@ -12,6 +12,7 @@ Step 8 - Generate background music for each dialogue using MusicGen.
 
 import argparse
 import csv
+import gc
 import os
 import re
 
@@ -32,7 +33,7 @@ from pydub import AudioSegment
 from tqdm import tqdm
 
 from config.audio_reference_samples import ENG_UK_HUME_DIR, ENG_INDIAN_MALE_DIR, ENG_INDIAN_FEMALE_DIR, \
-    HINDI_MALE_1_DIR, HINDI_FEMALE_1_DIR, HINDI_MALE_2_DIR, HINDI_FEMALE_2_DIR
+    HINDI_MALE_1_DIR, HINDI_FEMALE_1_DIR, HINDI_MALE_2_DIR, HINDI_FEMALE_2_DIR, ENG_INDIAN_MALE_MOHIT_DIR
 from config.background_music_models import MUSIC_GEN_MELODY
 from config.open_ai_config import API_KEY, TEXT_MODEL
 from config.tts_model_config import XTTS_V2
@@ -41,8 +42,8 @@ from interfaces.ocr import OCRInterface
 from transformers import pipeline
 
 
-# os.environ["OMP_NUM_THREADS"] = "1"
-# os.environ["MKL_THREADING_LAYER"] = "GNU"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_THREADING_LAYER"] = "GNU"
 
 def get_arguments():
 
@@ -54,17 +55,24 @@ def get_arguments():
     parser.add_argument('--pdf_end_page', type=int, default=19, help='End page number for text extraction.')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use for OCR processing (e.g., "cpu" or "cuda").')
     # Output csv path ---> The output directory will be same as that of pdf_path, with the output file name specified.
-    parser.add_argument('--output_csv_file_name', type=str, default='extracted_text.csv', help='Path to save the extracted text as CSV.')
+    parser.add_argument('--output_csv_file_name_extracted_text', type=str, default='extracted_text_hindi.csv', help='Path to save the extracted text as CSV.')
 
     # Step 2 : Clean the extracted text and save it to a CSV file.
     parser.add_argument('--openai_api_key', type=str, default= API_KEY, help='OpenAI API key for text cleaning')
     parser.add_argument('--open_ai_text_model', type=str, default= TEXT_MODEL, help='OpenAI text model to use for cleaning')
 
     # Step 3 : Convert the cleaned text to narration dialogues.
-    parser.add_argument('--output_csv_file_name_dialogue', type=str, default='narration_dialogues.csv', help='Path to save the narration dialogues as CSV.')
+    parser.add_argument('--output_csv_file_name_dialogue_english', type=str, default='narration_dialogues_english.csv',
+                        help='Path to save the narration dialogues as CSV.')
+    parser.add_argument('--output_csv_file_name_dialogue_hindi', type=str, default='narration_dialogues_hindi.csv',
+                        help='Path to save the narration dialogues as CSV.')
 
     # Step 7 : Convert the TTS
-    parser.add_argument('--reference_wav_dir', type=str, default= HINDI_FEMALE_2_DIR, help='Path to the reference audio file for TTS synthesis.')
+    parser.add_argument('--reference_wav_dir_english', type=str, default=ENG_INDIAN_MALE_MOHIT_DIR,
+                        help='Path to the reference audio file for TTS synthesis.')
+    parser.add_argument('--reference_wav_dir_hindi', type=str, default=HINDI_MALE_2_DIR,
+                        help='Path to the reference audio file for TTS synthesis.')
+
     parser.add_argument("--tts_model_name", type=str, default= XTTS_V2, help="Name of the TTS model to use")
 
     # Step 8 : Background Music Generation
@@ -225,17 +233,18 @@ class StoryIntroGenerator:
 
 class HindiNarration(OCRInterface, NarrationInterface) :
 
-    def __init__(self, pdf_path: str, pdf_start_page: int, pdf_end_page: int,
-                 device: str, output_csv_file_path: str,
-                 openai_api_key: str, open_ai_text_model: str,
-                 output_csv_file_path_dialogue: str, reference_wav_dir: str,
-                 tts_model_name: str, background_music_model: str)  :
+    def __init__(self, pdf_path: str = None, pdf_start_page: int = None,
+                 pdf_end_page: int = None, device: str = None,
+                 extract_text_csv_file_path: str = None,
+                 openai_api_key: str = None, open_ai_text_model: str = None,
+                 output_csv_file_path_dialogue: str = None, reference_wav_dir: str = None,
+                 tts_model_name: str = None, background_music_model: str = None)  :
 
         self.pdf_path = pdf_path
         self.pdf_start_page = pdf_start_page
         self.pdf_end_page = pdf_end_page
         self.device = device
-        self.output_csv_file_path = output_csv_file_path
+        self.extract_text_csv_file_path = extract_text_csv_file_path
         self.openai_api_key = openai_api_key
         self.output_csv_file_path_dialogue = output_csv_file_path_dialogue
         self.reference_wav_dir = reference_wav_dir
@@ -243,15 +252,24 @@ class HindiNarration(OCRInterface, NarrationInterface) :
         self.background_music_model_name = background_music_model
 
         # Initialize OpenAI client
-        self.open_ai_client = OpenAI(api_key=self.openai_api_key)
-        self.open_ai_text_model = open_ai_text_model
+        if self.openai_api_key is not None :
+            self.open_ai_client = OpenAI(api_key=self.openai_api_key)
+            self.open_ai_text_model = open_ai_text_model
+        else :
+            self.open_ai_client = None
+            self.open_ai_text_model = None
 
         # Initialize TTS model
-        self.tts = TTS(self.tts_model_name).to(self.device)
+        if self.tts_model_name is not None :
+            self.tts = TTS(self.tts_model_name).to(self.device)
+        else :
+            self.tts = None
 
         # Initialize MusicGen model
-        # self.musicgen_model = MusicGen.get_pretrained(self.background_music_model_name, device= self.device)
-        self.musicgen_model = None # Temprorary disable due to memory issues
+        if self.background_music_model_name is not None:
+            self.musicgen_model = MusicGen.get_pretrained(self.background_music_model_name, device=self.device)
+        else:
+            self.musicgen_model = None  # Temporarily disable MusicGen to avoid import issues during testing
 
         # Initialize DataFrame to hold extracted text
         self.df : pandas.DataFrame = None
@@ -273,7 +291,7 @@ class HindiNarration(OCRInterface, NarrationInterface) :
 
         # Initialize OCR reader
         reader = easyocr.Reader(['hi', 'en'])  # Hindi + English fallback
-        doc = fitz.open(pdf_path)
+        doc = fitz.open(self.pdf_path)
 
         with open(output_csv_file_name, 'w', newline='', encoding='utf-8') as csvfile:
             # Create a CSV writer object
@@ -282,16 +300,16 @@ class HindiNarration(OCRInterface, NarrationInterface) :
             writer.writerow(['Page Number', 'Content'])
             # Process each page in the specified range
             for page_num in tqdm(range(self.pdf_start_page - 1, self.pdf_end_page), desc="Processing pages",
-                                 total=end_page - start_page + 1):
+                                 total=self.pdf_end_page - self.pdf_start_page + 1):
                 pix = doc[page_num].get_pixmap(dpi=300)  # Higher DPI for better OCR
                 img_np = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
                 text = ' '.join(reader.readtext(img_np, detail=0))
                 writer.writerow([page_num + 2 - start_page, text.strip()])
 
-        print(f"Text extraction complete. Data saved to {self.output_csv_file_path}.")
+        print(f"Text extraction complete. Data saved to {self.extract_text_csv_file_path}.")
 
         # Load the dataframe common to class and return the extracted text as a DataFrame
-        self.df = pd.read_csv(output_csv_file_name)
+        self.df = pd.read_csv(self.extract_text_csv_file_path)
         return self.df
 
     def clean_ocr_text_iterrator(self, df: pandas.DataFrame) -> pandas.DataFrame :
@@ -314,7 +332,7 @@ class HindiNarration(OCRInterface, NarrationInterface) :
             self.df.at[index, 'Content Clean'] = cleaned_text
 
         # Rewrite the file to dataframe
-        self.df.to_csv(self.output_csv_file_path)
+        self.df.to_csv(self.extract_text_csv_file_path)
         return self.df
 
     def clean_ocr_text(self, text: str) -> str:
@@ -648,7 +666,7 @@ class HindiNarration(OCRInterface, NarrationInterface) :
         df['Speech Duration'] = None
 
         narration_output_dir = os.path.dirname(self.output_csv_file_path_dialogue)
-        narration_output_dir = os.path.join(narration_output_dir, 'narration_speech').replace('\\', '/')
+        narration_output_dir = os.path.join(narration_output_dir, 'narration_speech_hindi').replace('\\', '/')
 
         if not os.path.exists(narration_output_dir):
             os.makedirs(narration_output_dir, exist_ok= True)
@@ -913,7 +931,7 @@ class HindiNarration(OCRInterface, NarrationInterface) :
         df['Narration with Background Music Duration'] = None
 
         narration_and_background_music_output_path = os.path.dirname(self.output_csv_file_path_dialogue)
-        narration_and_background_music_output_path = os.path.join(narration_and_background_music_output_path, 'narration_and_background_music_combined').replace('\\', '/')
+        narration_and_background_music_output_path = os.path.join(narration_and_background_music_output_path, 'narration_and_background_music_combined_hindi').replace('\\', '/')
         if not os.path.exists(narration_and_background_music_output_path):
             os.makedirs(narration_and_background_music_output_path)
 
@@ -1155,7 +1173,7 @@ class HindiNarration(OCRInterface, NarrationInterface) :
 
         return response.output_text.strip()
 
-    def convert_hindi_dialogues_to_english_iterator(self, df: pandas.DataFrame) -> tuple[pandas.DataFrame, str]:
+    def convert_hindi_dialogues_to_english_iterator(self, df: pandas.DataFrame, english_csv_path) -> pandas.DataFrame:
         """
         :param df: Dataframe consists of ['Actor', 'Dialogue', 'Emotion', 'Background Activity', 'Dialogue Enhanced']
         :return: Return a new column ['Dialogue Hindi'] translated from 'Dialogue Enhanced'
@@ -1176,13 +1194,11 @@ class HindiNarration(OCRInterface, NarrationInterface) :
             new_df.at[i, "Dialogue Enhanced"] = english_dialogue
 
         # Construct a new file name for Hindi dialogues
-        english_csv_path = str(self.output_csv_file_path_dialogue).replace(".csv", "_english.csv")
-
         print(f"Saving English dialogues to {english_csv_path}")
         new_df.to_csv(english_csv_path, index=False, encoding="utf-8")
         print(f"English dialogues saved to {english_csv_path}")
 
-        return new_df, english_csv_path
+        return new_df
 
     def convert_hindi_dialogues_to_english(self, dialogue: str) -> str:
         """
@@ -1230,11 +1246,18 @@ if __name__ == '__main__' :
     pdf_start_page = args.pdf_start_page
     pdf_end_page = args.pdf_end_page
     device = args.device
-    output_csv_file_name = args.output_csv_file_name
+
+    output_csv_file_name_extracted_text = args.output_csv_file_name_extracted_text
+
     openai_api_key = args.openai_api_key
     open_ai_text_model = args.open_ai_text_model
-    output_csv_file_name_dialogue = args.output_csv_file_name_dialogue
-    reference_wav_dir = args.reference_wav_dir
+
+    output_csv_file_name_dialogue_english = args.output_csv_file_name_dialogue_english
+    output_csv_file_name_dialogue_hindi = args.output_csv_file_name_dialogue_hindi
+
+    reference_wav_dir_english = args.reference_wav_dir_english
+    reference_wav_dir_hindi = args.reference_wav_dir_hindi
+
     tts_model_name = args.tts_model_name
     background_music_model = args.background_music_model
 
@@ -1243,11 +1266,17 @@ if __name__ == '__main__' :
     print(f"PDF Start Page: {pdf_start_page}")
     print(f"PDF End Page: {pdf_end_page}")
     print(f"Device: {device}")
-    print(f"Output CSV File Name: {output_csv_file_name}")
+
+    print(f"Output CSV File Name: {output_csv_file_name_extracted_text}")
+
     print(f"OpenAI API Key: {openai_api_key}")
     print(f"OpenAI Text Model: {open_ai_text_model}")
-    print(f"Output CSV File Name Dialogue: {output_csv_file_name_dialogue}")
-    print(f"Reference WAV: {reference_wav_dir}")
+
+    print(f"Output CSV File Name Dialogue English: {output_csv_file_name_dialogue_english}")
+    print(f"Output CSV File Name Dialogue Hindi: {output_csv_file_name_dialogue_hindi}")
+    print(f"Reference WAV English: {reference_wav_dir_english}")
+    print(f"Reference WAV Hindi: {reference_wav_dir_hindi}")
+
     print(f"TTS Model Name: {tts_model_name}")
     print(f"Background Music Model : {background_music_model}")
 
@@ -1272,60 +1301,63 @@ if __name__ == '__main__' :
 
         print(f"Processing {chapter_name} from page {start_page} to {end_page}")
 
+        print(f"Starting with the Hindi Narration, i.e. base language of book")
+
         # Creating the directory to save the CSV file path
         base_dir = os.path.dirname(pdf_path)
         base_dir = os.path.join(base_dir, f"{chapter_name}").replace('\\', '/')
         os.makedirs(base_dir, exist_ok= True)
 
         # Creating the output CSV file path in base directory
-        output_csv_file_path = os.path.join(base_dir, f"{output_csv_file_name}").replace('\\', '/')
-        output_csv_file_path_dialogue = os.path.join(base_dir, f"{output_csv_file_name_dialogue}").replace('\\', '/')
+        output_csv_file_path_extracted_text = os.path.join(base_dir, f"{output_csv_file_name_extracted_text}").replace('\\', '/')
+        output_csv_file_path_dialogue_english = os.path.join(base_dir, f"{output_csv_file_name_dialogue_english}").replace('\\','/')
+        output_csv_file_path_dialogue_hindi = os.path.join(base_dir, f"{output_csv_file_name_dialogue_hindi}").replace('\\', '/')
 
-        print(f"CSV path : {output_csv_file_path}")
-        print(f"CSV Dialogue path : {output_csv_file_path_dialogue}")
+        # Print Arguments
+        print(f"Extracted text csv path : {output_csv_file_path_extracted_text}")
+        print(f"Dialogue English csv path : {output_csv_file_path_dialogue_english}")
+        print(f"Dialogue Hindi csv path : {output_csv_file_name_dialogue_hindi}")
 
         # Create an instance of the EnglishNarration class
-        narration = HindiNarration(
+        narration_hindi = HindiNarration(
             pdf_path=pdf_path,
             pdf_start_page=start_page,
             pdf_end_page=end_page,
             device=device,
-            output_csv_file_path= output_csv_file_path,
+            extract_text_csv_file_path= output_csv_file_path_extracted_text,
             openai_api_key=openai_api_key,
             open_ai_text_model=open_ai_text_model,
-            output_csv_file_path_dialogue=output_csv_file_path_dialogue,
-            reference_wav_dir =reference_wav_dir,
+            output_csv_file_path_dialogue=output_csv_file_path_dialogue_hindi,
+            reference_wav_dir =reference_wav_dir_hindi,
             tts_model_name=tts_model_name,
             background_music_model= background_music_model
         )
 
         print("Step 1: Extracting text from PDF")
-        df = narration.extract_text_from_pdf(pdf_path= narration.pdf_path,
-                                             start_page= narration.pdf_start_page,
-                                             end_page= narration.pdf_end_page,
-                                             output_csv_file_name= narration.output_csv_file_path)
+        df = narration_hindi.extract_text_from_pdf()
 
-        print(f"Step 2 : Cleaning the extractd text saved in {narration.output_csv_file_path}")
-        df = narration.clean_ocr_text_iterrator(df= df)
+        print(f"Step 2 : Cleaning the extractd text saved in {narration_hindi.extract_text_csv_file_path}")
+        df = narration_hindi.clean_ocr_text_iterrator(df)
 
         print(f"Step 3: Converting cleaned text to narration dialogues ...")
-        df = narration.generate_script_iterrator(df= df)
+        df = narration_hindi.generate_script_iterrator(df)
 
         print("Step 4: Converting narration to enhanced narration...")
-        df = narration.convert_narration_to_enhanced_narration_iterrator(df= df)
+        df = narration_hindi.convert_narration_to_enhanced_narration_iterrator(df)
 
         print("Step 5: Converting background activities to musical prompt...")
-        df = narration.convert_background_activites_and_dialogues_to_musical_prompt_iterrator(df= df)
+        df = narration_hindi.convert_background_activites_and_dialogues_to_musical_prompt_iterrator(df)
 
         print("Step 6: Narration Validation")
-        narration.narration_check(df= df)
+        narration_hindi.narration_check(df= df)
 
         print("Step 6.1: Changing language from Hindi to English for Emotion, Background Activity and Musical Prompt...")
-        df = narration.change_language_iterrator(df=df)
+        df = narration_hindi.change_language_iterrator(df=df)
 
         print("Step 7 : Generate a introduction for the story to begin with ...")
-        generator = StoryIntroGenerator(openai_api_key=openai_api_key, openai_text_model=open_ai_text_model,
-                                        df=pd.read_csv(narration.output_csv_file_path_dialogue))
+        generator = StoryIntroGenerator(openai_api_key=openai_api_key,
+                                        openai_text_model=open_ai_text_model,
+                                        df=pd.read_csv(narration_hindi.output_csv_file_path_dialogue))
         story_intro_paragraph = generator.generate_story_intro_from_csv()
         story_intro_paragraph += " अब, आइए कहानी में प्रवेश करते हैं।"
         print("Story Intro:\n", story_intro_paragraph)
@@ -1336,7 +1368,7 @@ if __name__ == '__main__' :
         print("Story Takeaway:\n", story_takeaway_paragraph)
 
         # Load existing narration file
-        df = pd.read_csv(narration.output_csv_file_path_dialogue)
+        df = pd.read_csv(narration_hindi.output_csv_file_path_dialogue)
 
         # Intro row
         intro_row = pd.DataFrame({
@@ -1357,50 +1389,27 @@ if __name__ == '__main__' :
         # Combine intro, main dialogues, and takeaway
         df = pd.concat([intro_row, df, takeaway_row], ignore_index=True)
         # Save updated CSV
-        df.to_csv(narration.output_csv_file_path_dialogue, index=False, encoding="utf-8")
-        print(f"Updated CSV with intro and takeaway saved to {narration.output_csv_file_path_dialogue}")
+        df.to_csv(narration_hindi.output_csv_file_path_dialogue, index=False, encoding="utf-8")
+        print(f"Updated CSV with intro and takeaway saved to {narration_hindi.output_csv_file_path_dialogue}")
 
         print("Step 9: Converting narration dialogues to speech using XTTS v2...")
-        df = pd.read_csv(output_csv_file_path_dialogue)
-        df = narration.convert_text_to_speech_iterrator(df= df)
+        torch.cuda.empty_cache()
+        df = narration_hindi.convert_text_to_speech_iterrator(df)
 
         print("Step 10: Generating background music for each narration dialogue...")
         torch.cuda.empty_cache()
-        df = narration.generate_background_music_iterator(df)
+        df = narration_hindi.generate_background_music_iterator(df)
 
         print("Step 11: Merging the narration and background music ...")
-        df = pd.read_csv(output_csv_file_path_dialogue)
-        df = narration.merge_narration_background_music_iterrator(df)
+        df = narration_hindi.merge_narration_background_music_iterrator(df)
 
         print("Step 12 : Need to merge all different chunks into a single file ...")
-        narration.merge_wavs(df)
+        narration_hindi.merge_wavs(df)
 
-        print("Step 13 : Convert the Hindi Dialogue to Other Language ...")
+        # Clearning the cache memory and object which are initialized before
+        narration_hindi = None
+        torch.cuda.empty_cache()
+        gc.collect()
 
-        print("Step 13.1 : Converting to English ...")
-        df = pd.read_csv(narration.output_csv_file_path_dialogue)
-        df, output_csv_file_path_dialogue_english = narration.convert_hindi_dialogues_to_english_iterator(df)
-        reference_wav_dir = ENG_INDIAN_MALE_DIR
+        print(f"Completed Narration for  {chapter_name} from page {start_page} to {end_page}")
 
-        print("Step 13.1.1 : Now need to repeat the steps 7, 8, 9, 10 for English ...")
-        # narration_english = EnglishNarration(
-        #     pdf_path=pdf_path,
-        #     pdf_start_page=start_page,
-        #     pdf_end_page=end_page,
-        #     device=device,
-        #     output_csv_file_path=output_csv_file_path,
-        #     openai_api_key=openai_api_key,
-        #     open_ai_text_model=open_ai_text_model,
-        #     output_csv_file_path_dialogue=output_csv_file_path_dialogue_english,
-        #     reference_wav_dir=reference_wav_dir,
-        #     tts_model_name=tts_model_name,
-        #     background_music_model=background_music_model
-        # )
-        # df = narration_english.convert_text_to_speech_iterrator(df=df)
-        # df = narration_english.merge_narration_background_music_iterrator(df)
-        # narration_english.merge_wavs(df)
-
-        print("Step 14 : Need to create video for each different prompt and need to save them ...")
-        # TODO : Next Step
-
-        print("All Task Completed")
