@@ -15,6 +15,7 @@ import csv
 import gc
 import os
 import re
+from typing import Optional
 
 import audiocraft
 import easyocr
@@ -74,7 +75,6 @@ def get_arguments():
     parser.add_argument('--background_music_model', type=str, default= MUSIC_GEN_MELODY, help= "Model for generating the Background Music using prompt")  # Adding small model for now [Original] ---> facebook/musicgen-large
 
     return parser.parse_args()
-
 
 class StoryIntroGenerator:
     def __init__(self, openai_api_key: str, openai_text_model: str, df: pd.DataFrame):
@@ -267,8 +267,8 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
             self.musicgen_model = None # Temporarily disable MusicGen to avoid import issues during testing
 
         # Initialize DataFrame to hold extracted text
-        self.df : pandas.DataFrame = None
-        self.df_dialogues : pandas.DataFrame = None
+        self.df: Optional[pandas.DataFrame] = None
+        self.df_dialogues: Optional[pandas.DataFrame] = None
 
         # List of voice emmotions available in audio reference samples
         self.voice_artist_emmotions = []
