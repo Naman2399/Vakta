@@ -1123,7 +1123,7 @@ class HindiNarration(OCRInterface, NarrationInterface) :
 
         # Export final audio
         if final_audio:
-            base_dir = os.path.dirname(self.output_csv_file_path)
+            base_dir = os.path.dirname(self.output_csv_file_path_dialogue)
             final_audio_output_path = os.path.join(base_dir, "final_hindi.wav").replace('\\', '/')
             final_audio.export(final_audio_output_path, format="wav")
             print(f"🎵 Final merged audio saved at: {final_audio_output_path}")

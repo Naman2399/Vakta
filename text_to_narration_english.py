@@ -35,7 +35,7 @@ from tqdm import tqdm
 from transformers import pipeline
 
 from config.audio_reference_samples import ENG_INDIAN_MALE_MOHIT_DIR, HINDI_MALE_2_DIR
-from config.background_music_models import MUSIC_GEN_MELODY
+from config.background_music_models import MUSIC_GEN_MELODY, MUSIC_GEN_SMALL
 from config.open_ai_config import API_KEY, TEXT_MODEL
 from config.tts_model_config import XTTS_V2
 from interfaces.narration import NarrationInterface
@@ -72,7 +72,7 @@ def get_arguments():
     parser.add_argument("--tts_model_name", type=str, default= XTTS_V2, help="Name of the TTS model to use")
 
     # Step 8 : Background Music Generation
-    parser.add_argument('--background_music_model', type=str, default= MUSIC_GEN_MELODY, help= "Model for generating the Background Music using prompt")  # Adding small model for now [Original] ---> facebook/musicgen-large
+    parser.add_argument('--background_music_model', type=str, default= MUSIC_GEN_SMALL, help= "Model for generating the Background Music using prompt")  # Adding small model for now [Original] ---> facebook/musicgen-large
 
     return parser.parse_args()
 
@@ -1110,7 +1110,7 @@ class EnglishNarration(OCRInterface, NarrationInterface) :
 
         # Export final audio
         if final_audio:
-            base_dir = os.path.dirname(self.output_csv_file_path)
+            base_dir = os.path.dirname(self.extract_text_csv_file_path)
             final_audio_output_path = os.path.join(base_dir, "final_english.wav").replace('\\', '/')
             final_audio.export(final_audio_output_path, format="wav")
             print(f"🎵 Final merged audio saved at: {final_audio_output_path}")
@@ -1237,6 +1237,8 @@ if __name__ == '__main__' :
     # Define the chapter mapping
     chapter_mapping = {  # key is the chapter name, value is a list of start and end pages
         # 'chapter_0_ikigai_mysterious_word': [pdf_start_page, pdf_end_page],
+
+        # 'sample_check': [8, 8],
         'chapter_0_ikigai_mysterious_word': [8, 10],
         'chapter_1_ikigai_secret_of_japan': [12, 17],
         'chapter_2_ikigai_antiaging_secret': [19, 27],
@@ -1294,14 +1296,6 @@ if __name__ == '__main__' :
             reference_wav_dir = reference_wav_dir_english,
             tts_model_name=tts_model_name,
             background_music_model= None
-        )
-
-        # Create an instance of the HindiNarration class
-        narration_hindi = HindiNarration(
-            output_csv_file_path_dialogue= output_csv_file_path_dialogue_hindi,
-            reference_wav_dir= reference_wav_dir_hindi,
-            tts_model_name= tts_model_name,
-            background_music_model=background_music_model
         )
 
         print("Step 1: Extracting text from PDF")
@@ -1367,43 +1361,63 @@ if __name__ == '__main__' :
 
         print("Step 10 : Convert the English Dialgoue to Other Languages ...")
 
+
         print("Step 10.1 : Converting to Hindi ...")
         df_hindi = narration_english.convert_english_dialogues_to_hindi_iterator(df, output_csv_file_path_dialogue_hindi)
+        # Clearning the cache memory and object which are initialized before
+        narration_english = None
+        torch.cuda.empty_cache()
+        gc.collect()
+
+        # Create an instance of the HindiNarration class
+        narration_hindi = HindiNarration(
+            output_csv_file_path_dialogue=output_csv_file_path_dialogue_hindi,
+            reference_wav_dir=reference_wav_dir_hindi,
+            tts_model_name=tts_model_name,
+            background_music_model=background_music_model
+        )
         df_hindi = narration_hindi.convert_text_to_speech_iterrator(df_hindi)
 
         # Clearning the cache memory and object which are initialized before
-        narration_english = None
         narration_hindi = None
         torch.cuda.empty_cache()
         gc.collect()
 
         # Re-initialize the narration_english object to use the background music model
         print("Step 11: Generating background music for each narration dialogue...")
-        narration_english = EnglishNarration(background_music_model= background_music_model)
+        narration_english = EnglishNarration(
+            extract_text_csv_file_path=output_csv_file_path_extracted_text,
+            output_csv_file_path_dialogue = output_csv_file_path_dialogue_english,
+            background_music_model= background_music_model,
+            device= device)
         df = narration_english.generate_background_music_iterator(pd.read_csv(output_csv_file_path_dialogue_english))
 
         print("Step 12: Merging the narration and background music ...")
         df = narration_english.merge_narration_background_music_iterrator(df)
 
         print("Step 12 : Need to merge all different chunks into a single file ...")
-        df = narration_english.merge_wavs(df)
-
+        narration_english.merge_wavs(df)
+        # Clearning the cache memory and object which are initialized before
+        narration_english = None
+        torch.cuda.empty_cache()
+        gc.collect()
 
         print("Step 13 : Replicating the background music for Step 10 ... ")
 
         print("Step 13.1 : Merging the narration and background music for Hindi ...")
-
         # Next step is to update these columns in the Hindi CSV file
+        df = pd.read_csv(output_csv_file_path_dialogue_english)
         df_hindi = pd.read_csv(output_csv_file_path_dialogue_hindi)
         df_hindi['Background Music Output Path'] = df['Background Music Output Path']
         df_hindi['Background Music Duration'] = df['Background Music Duration']
 
-        narration_hindi = HindiNarration()
-        narration_hindi.merge_narration_background_music(df_hindi)
+        narration_hindi = HindiNarration(
+            output_csv_file_path_dialogue = output_csv_file_path_dialogue_hindi,
+        )
+        narration_hindi.merge_narration_background_music_iterrator(df_hindi)
         narration_hindi.merge_wavs(df_hindi)
 
         # Clearning the cache memory and object which are initialized before
-        narration_english = None
         narration_hindi = None
         torch.cuda.empty_cache()
         gc.collect()
